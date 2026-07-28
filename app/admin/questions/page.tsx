@@ -7,6 +7,7 @@ import { useAdmin } from '../_lib/admin-context';
 import { AdminPageHeader } from '../_components/admin-page-header';
 import { DifficultyBadge, MediaBadge } from '../_components/badges';
 import { mediaTypeOf, type AdminQuestion, type MediaType } from '../_lib/types';
+import { QuestionFormModal } from '../_components/question-form-modal';
 import {
   Table,
   TableBody,
@@ -32,13 +33,15 @@ import type { QuestionDifficulty } from '@/lib/types';
  * is functional against the local store.
  */
 export default function AdminQuestionsPage() {
-  const { data, ready, deleteQuestion } = useAdmin();
+  const { data, ready, deleteQuestion, addQuestion, updateQuestion } = useAdmin();
   const { toast } = useToast();
 
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [difficultyFilter, setDifficultyFilter] = useState<string>('all');
   const [mediaFilter, setMediaFilter] = useState<string>('all');
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState<AdminQuestion | null>(null);
 
   // Category id -> name lookup for the table + filter options.
   const categoryName = useMemo(() => {
@@ -74,17 +77,25 @@ export default function AdminQuestionsPage() {
   };
 
   const handleAdd = () => {
-    toast({
-      title: 'إضافة سؤال',
-      description: 'سيُضاف نموذج إنشاء سؤال جديد قريباً',
-    });
+    setEditing(null);
+    setShowForm(true);
   };
 
   const handleEdit = (q: AdminQuestion) => {
-    toast({
-      title: 'تعديل سؤال',
-      description: 'سيُضاف نموذج تعديل السؤال قريباً',
-    });
+    setEditing(q);
+    setShowForm(true);
+  };
+
+  const handleSave = (formData: Omit<AdminQuestion, 'id'>) => {
+    if (editing) {
+      updateQuestion(editing.id, formData);
+      toast({ title: 'تم الحفظ', description: 'حُفظت تعديلات السؤال' });
+    } else {
+      addQuestion(formData);
+      toast({ title: 'تمت الإضافة', description: 'أُضيف السؤال إلى بنك الأسئلة' });
+    }
+    setShowForm(false);
+    setEditing(null);
   };
 
   const handleDelete = (q: AdminQuestion) => {
@@ -276,6 +287,18 @@ export default function AdminQuestionsPage() {
           </TableBody>
         </Table>
       </div>
+
+      {showForm && (
+        <QuestionFormModal
+          question={editing}
+          categories={data.categories}
+          onClose={() => {
+            setShowForm(false);
+            setEditing(null);
+          }}
+          onSave={handleSave}
+        />
+      )}
     </div>
   );
 }

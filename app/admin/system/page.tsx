@@ -62,11 +62,11 @@ export default function SystemDiagnosticsPage() {
     }
   };
 
-  // Auto-run once on first hydration.
+  // Auto-run on first hydration and whenever the underlying data changes.
   useEffect(() => {
-    if (ready && !result && !loading) runDiagnostics();
+    if (ready && !loading) runDiagnostics();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready]);
+  }, [ready, data.categories, data.questions, settings.categories.hidden, settings.categories.disabled]);
 
   return (
     <div className="mx-auto max-w-6xl">

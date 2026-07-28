@@ -1,8 +1,19 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
-import { Play, Dices, BookOpen, Settings, Sparkles } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Play, Dices, BookOpen, Settings, Sparkles, Lock } from 'lucide-react';
 import { PageShell } from '@/components/layout/page-shell';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { authenticateAdmin } from '@/app/admin/_lib/auth';
 
 interface HomeAction {
   href: string;
@@ -51,6 +62,22 @@ const variantClasses: Record<HomeAction['variant'], string> = {
 };
 
 export default function HomePage() {
+  const router = useRouter();
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+
+  const handleAdminAccess = () => {
+    if (authenticateAdmin(password)) {
+      setAdminOpen(false);
+      setPassword('');
+      setError('');
+      router.push('/admin');
+    } else {
+      setError('كلمة المرور غير صحيحة');
+    }
+  };
+
   return (
     <PageShell className="items-center justify-center text-center">
       {/* Floating sparkle accents */}
@@ -106,6 +133,71 @@ export default function HomePage() {
       <p className="mt-12 text-xs font-medium text-muted-foreground/70">
         لعبة جماعية — شاشة واحدة، فريقان، وتحدي لا يُنسى
       </p>
+
+      {/* Subtle admin access */}
+      <button
+        type="button"
+        onClick={() => setAdminOpen(true)}
+        aria-label="إدارة"
+        className="fixed top-4 right-4 z-30 flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground/30 transition-all duration-300 hover:text-muted-foreground"
+      >
+        <Settings className="h-4 w-4" />
+      </button>
+
+      {/* Admin password dialog */}
+      <Dialog open={adminOpen} onOpenChange={setAdminOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Lock className="h-4 w-4 text-primary" />
+              دخول الإدارة
+            </DialogTitle>
+            <DialogDescription>
+              أدخل كلمة المرور للوصول إلى لوحة الإدارة
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleAdminAccess();
+            }}
+          >
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                setError('');
+              }}
+              placeholder="كلمة المرور"
+              autoFocus
+              className="w-full rounded-lg border border-input bg-background/60 px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
+            />
+            {error && (
+              <p className="mt-2 text-sm font-medium text-destructive">{error}</p>
+            )}
+            <DialogFooter className="mt-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setAdminOpen(false);
+                  setPassword('');
+                  setError('');
+                }}
+                className="rounded-full border border-border/60 bg-card/40 px-4 py-2 text-sm font-semibold text-muted-foreground transition-all hover:border-primary/50 hover:text-foreground"
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                className="inline-flex items-center gap-2 rounded-full bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-lg transition-all hover:opacity-90"
+              >
+                دخول
+              </button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </PageShell>
   );
 }

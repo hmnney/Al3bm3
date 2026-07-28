@@ -62,7 +62,7 @@ const STEPS = [
 type Step = 0 | 1 | 2 | 3 | 4;
 
 export default function AdminImportPage() {
-  const { data, addQuestion } = useAdmin();
+  const { data, addQuestion, addCategory } = useAdmin();
   const { toast } = useToast();
 
   const [step, setStep] = useState<Step>(0);
@@ -146,12 +146,23 @@ export default function AdminImportPage() {
 
   const doImport = useCallback(() => {
     let count = 0;
+    const existingIds = new Set(validCategoryIds);
+    const createdCatIds = new Set<string>();
     rows.forEach((row, i) => {
       const analysis = analyses[i];
       const override = overrides[row.rowIndex];
       if (!analysis || !override || !override.accepted) return;
       const cat = row.category.trim();
-      if (!validCategoryIds.includes(cat)) return;
+      if (!cat) return;
+      if (!existingIds.has(cat) && !createdCatIds.has(cat)) {
+        addCategory({
+          name: cat,
+          description: cat,
+          glyph: '🎯',
+          gradient: 'from-indigo-500/80 to-blue-700/80',
+        });
+        createdCatIds.add(cat);
+      }
       addQuestion({
         categoryId: cat,
         difficulty: override.difficulty,
@@ -168,9 +179,11 @@ export default function AdminImportPage() {
     setStep(4);
     toast({
       title: 'تم الاستيراد',
-      description: `أُضيف ${count.toLocaleString('ar-EG')} سؤالاً إلى بنك الأسئلة`,
+      description: `أُضيف ${count.toLocaleString('ar-EG')} سؤالاً إلى بنك الأسئلة${
+        createdCatIds.size > 0 ? `، وتم إنشاء ${createdCatIds.size} تصنيف جديد` : ''
+      }`,
     });
-  }, [rows, analyses, overrides, validCategoryIds, addQuestion, toast]);
+  }, [rows, analyses, overrides, validCategoryIds, addQuestion, addCategory, toast]);
 
   const reset = useCallback(() => {
     setStep(0);
