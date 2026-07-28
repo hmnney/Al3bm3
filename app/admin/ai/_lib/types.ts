@@ -145,7 +145,13 @@ export interface AIProvider {
   needsKey: boolean;
 
   /** Test that the configured credentials/model work. */
-  testConnection(config: AIProviderConfig): Promise<{ ok: boolean; message: string }>;
+  testConnection(config: AIProviderConfig): Promise<{
+    ok: boolean;
+    message: string;
+    /** If the provider auto-detected a working model, it's returned here so
+     *  the caller can persist it into settings. */
+    detectedModel?: string;
+  }>;
 
   /** Analyze existing questions for quality, duplicates, gaps. */
   analyzeQuestions(

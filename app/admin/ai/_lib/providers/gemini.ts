@@ -26,7 +26,6 @@ import {
   improvePrompt,
   coachPrompt,
   diagnosticsPrompt,
-  TEST_CONNECTION_PROMPT,
 } from '../prompts';
 import { parseJsonLoose, fetchWithTimeout } from '../json-utils';
 
@@ -44,6 +43,7 @@ import { parseJsonLoose, fetchWithTimeout } from '../json-utils';
  *  - JSON validation + automatic repair
  *  - responseMimeType: 'application/json' for structured output
  *  - Graceful fallback to Mock AI on any error
+ *  - Dynamic model discovery (never hardcodes outdated model names)
  *
  * Safety:
  *  - The API key is never logged or exposed in error messages.
@@ -60,9 +60,91 @@ interface GeminiResponse {
   error?: { message?: string };
 }
 
+interface GeminiModelsResponse {
+  models?: Array<{
+    name: string;
+    supportedGenerationMethods?: string[];
+  }>;
+  error?: { message?: string };
+}
+
+/** Cache of the last discovered valid model, keyed by apiKey. */
+let cachedModel: string | null = null;
+let cachedForKey: string | null = null;
+
 /** Extract text content from a Gemini response. */
 function extractText(res: GeminiResponse): string {
   return res.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+}
+
+/**
+ * Dynamically discover available Gemini models via GET /v1beta/models.
+ * Returns the model name (e.g. "gemini-2.0-flash") or null on failure.
+ *
+ * Selection priority:
+ *   1. The configured model, if it exists and supports generateContent.
+ *   2. The first model whose name contains "flash" (fast, cheap, good for JSON).
+ *   3. The first model that supports generateContent.
+ */
+async function resolveModel(config: AIProviderConfig): Promise<string | null> {
+  if (!config.apiKey) return null;
+
+  // Return cache if the key hasn't changed.
+  if (cachedModel && cachedForKey === config.apiKey) return cachedModel;
+
+  const url = `${GEMINI_BASE}/models?key=${encodeURIComponent(config.apiKey)}`;
+  try {
+    const res = await fetchWithTimeout(
+      url,
+      { method: 'GET', headers: { 'Content-Type': 'application/json' } },
+      10_000
+    );
+    const json = (await res.json()) as GeminiModelsResponse;
+    if (!res.ok || json.error || !json.models) return null;
+
+    const models = json.models;
+    const supportsGen = (m: (typeof models)[number]) =>
+      m.supportedGenerationMethods?.includes('generateContent');
+
+    // 1. Configured model still valid?
+    if (config.model) {
+      const match = models.find(
+        (m) =>
+          m.name === `models/${config.model}` ||
+          m.name === config.model
+      );
+      if (match && supportsGen(match)) {
+        const name = match.name.replace(/^models\//, '');
+        cachedModel = name;
+        cachedForKey = config.apiKey;
+        return name;
+      }
+    }
+
+    // 2. First Flash model.
+    const flash = models.find(
+      (m) => supportsGen(m) && m.name.toLowerCase().includes('flash')
+    );
+    if (flash) {
+      const name = flash.name.replace(/^models\//, '');
+      cachedModel = name;
+      cachedForKey = config.apiKey;
+      return name;
+    }
+
+    // 3. First model that supports generateContent.
+    const any = models.find(supportsGen);
+    if (any) {
+      const name = any.name.replace(/^models\//, '');
+      cachedModel = name;
+      cachedForKey = config.apiKey;
+      return name;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -73,7 +155,9 @@ async function callGemini(
   prompt: string,
   config: AIProviderConfig
 ): Promise<string | null> {
-  const model = config.model || 'gemini-1.5-flash';
+  const model = await resolveModel(config);
+  if (!model) return null;
+
   const url = `${GEMINI_BASE}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(config.apiKey)}`;
   const body = {
     contents: [{ parts: [{ text: prompt }] }],
@@ -98,22 +182,22 @@ async function callGemini(
       );
       const json = (await res.json()) as GeminiResponse;
       if (!res.ok || json.error) {
-        // Don't retry on auth errors — they'll just fail again.
         const msg = json.error?.message ?? `Gemini error ${res.status}`;
+        // Don't retry on auth/client errors — they'll just fail again.
         if (res.status === 400 || res.status === 401 || res.status === 403) {
-          throw new Error(msg);
+          // If the model is invalid, invalidate cache so next call re-discovers.
+          if (msg.toLowerCase().includes('not found') || msg.toLowerCase().includes('not supported')) {
+            cachedModel = null;
+            cachedForKey = null;
+          }
+          return null;
         }
-        // Retry on server errors / rate limits.
         if (attempt === 0) continue;
-        throw new Error(msg);
-      }
-      return extractText(json);
-    } catch (e) {
-      if (attempt === 1) {
-        // Return null on second failure — caller falls back to mock.
         return null;
       }
-      // First failure: retry.
+      return extractText(json);
+    } catch {
+      if (attempt === 1) return null;
       continue;
     }
   }
@@ -140,27 +224,51 @@ export class GeminiProvider implements AIProvider {
 
   async testConnection(
     config: AIProviderConfig
-  ): Promise<{ ok: boolean; message: string }> {
+  ): Promise<{ ok: boolean; message: string; detectedModel?: string }> {
     if (!config.apiKey) {
       return { ok: false, message: 'مفتاح API مطلوب لـ Gemini.' };
     }
 
-    // Use the models list endpoint for a lightweight connectivity check.
-    const model = config.model || 'gemini-1.5-flash';
-    const url = `${GEMINI_BASE}/models/${encodeURIComponent(model)}?key=${encodeURIComponent(config.apiKey)}`;
+    // Dynamically discover available models.
+    const model = await resolveModel(config);
+    if (!model) {
+      return {
+        ok: false,
+        message: 'تعذّر العثور على أي نموذج متاح. تحقق من صلاحية المفتاح.',
+      };
+    }
+
+    // Test the real selected model with a minimal generateContent call.
+    const url = `${GEMINI_BASE}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(config.apiKey)}`;
+    const body = {
+      contents: [{ parts: [{ text: 'أجب بـ {"status":"ok"} فقط.' }] }],
+      generationConfig: {
+        temperature: 0,
+        maxOutputTokens: 32,
+        responseMimeType: 'application/json',
+      },
+    };
 
     try {
       const res = await fetchWithTimeout(
         url,
-        { method: 'GET', headers: { 'Content-Type': 'application/json' } },
-        10_000
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+        15_000
       );
-      const json = (await res.json()) as GeminiResponse & { name?: string };
+      const json = (await res.json()) as GeminiResponse;
       if (!res.ok || json.error) {
         const msg = json.error?.message ?? `HTTP ${res.status}`;
         return { ok: false, message: `فشل الاتصال: ${msg}` };
       }
-      return { ok: true, message: 'تم الاتصال بـ Gemini بنجاح.' };
+      return {
+        ok: true,
+        message: `تم الاتصال بـ Gemini بنجاح (النموذج: ${model}).`,
+        detectedModel: model,
+      };
     } catch (e) {
       return { ok: false, message: `فشل الاتصال: ${(e as Error).message}` };
     }

@@ -91,6 +91,19 @@ export default function AISettingsPage() {
         maxTokens,
       });
       setTestResult(result);
+      // Auto-save the detected model into AI Settings on success.
+      if (result.ok && result.detectedModel && result.detectedModel !== model) {
+        setModel(result.detectedModel);
+        update({
+          ai: {
+            ...ai,
+            apiKey: apiKey.trim(),
+            model: result.detectedModel,
+            temperature,
+            maxTokens,
+          },
+        });
+      }
       toast({
         title: result.ok ? 'نجح الاتصال' : 'فشل الاتصال',
         description: result.message,
