@@ -9,6 +9,7 @@ import {
   AudioLines,
   Video,
   ArrowLeft,
+  Bot,
 } from 'lucide-react';
 import { useAdmin } from './_lib/admin-context';
 import { AdminPageHeader } from './_components/admin-page-header';
@@ -93,7 +94,7 @@ export default function AdminDashboardPage() {
           </div>
 
           {/* Quick links */}
-          <div className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <Link
               href="/admin/categories"
               className="group flex items-center gap-4 rounded-2xl border-2 border-border/50 bg-card/50 p-6 backdrop-blur transition-all hover:border-primary/40 hover:shadow-xl"
@@ -124,6 +125,23 @@ export default function AdminDashboardPage() {
                 </span>
                 <span className="text-sm text-muted-foreground">
                   ابحث وصفِّ أسئلة اللعبة
+                </span>
+              </div>
+              <ArrowLeft className="h-5 w-5 text-muted-foreground transition-transform group-hover:-translate-x-1" />
+            </Link>
+            <Link
+              href="/admin/settings/ai"
+              className="group flex items-center gap-4 rounded-2xl border-2 border-border/50 bg-card/50 p-6 backdrop-blur transition-all hover:border-primary/40 hover:shadow-xl"
+            >
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 text-white shadow-lg">
+                <Bot className="h-6 w-6" />
+              </div>
+              <div className="flex flex-1 flex-col">
+                <span className="text-lg font-black text-foreground">
+                  الذكاء الاصطناعي
+                </span>
+                <span className="text-sm text-muted-foreground">
+                  مزود الذكاء الاصطناعي وإعداداته
                 </span>
               </div>
               <ArrowLeft className="h-5 w-5 text-muted-foreground transition-transform group-hover:-translate-x-1" />
