@@ -53,7 +53,7 @@ export function defaultSettings(): AllSettings {
       enabled: false,
       provider: 'mock',
       apiKey: '',
-      model: 'mock-local',
+      model: '',
       temperature: 0.7,
       maxTokens: 1024,
     },

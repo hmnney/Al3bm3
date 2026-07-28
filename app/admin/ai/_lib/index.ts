@@ -66,13 +66,18 @@ export type {
   AIQuestion,
   AnalyzeRequest,
   AnalyzeResult,
+  ClassifyRequest,
+  ClassifyResult,
   CoachRequest,
   CoachResult,
   DiagnosticsRequest,
   DiagnosticsResult,
   GenerateRequest,
+  GenerateWordsRequest,
+  GenerateWordsResult,
   ImproveRequest,
   ImproveResult,
+  ModelInfo,
 } from './types';
 export {
   PROVIDER_LABELS,

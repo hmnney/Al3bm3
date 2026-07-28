@@ -14,6 +14,9 @@ import {
   Loader2,
   CheckCircle2,
   XCircle,
+  ChevronDown,
+  ChevronRight,
+  ListChecks,
 } from 'lucide-react';
 import { useSettings } from '../../_lib/settings-context';
 import { useToast } from '@/hooks/use-toast';
@@ -27,7 +30,16 @@ import {
   PROVIDER_DEFAULT_MODELS,
   PROVIDER_NEEDS_KEY,
   type AIProviderId,
+  type ModelInfo,
 } from '../../ai/_lib';
+
+interface TestResultData {
+  ok: boolean;
+  message: string;
+  detectedModel?: string;
+  availableModels?: ModelInfo[];
+  selectedModel?: string;
+}
 
 export default function AISettingsPage() {
   const { settings, update } = useSettings();
@@ -38,7 +50,8 @@ export default function AISettingsPage() {
   const [temperature, setTemperature] = useState(ai.temperature);
   const [maxTokens, setMaxTokens] = useState(ai.maxTokens);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<TestResultData | null>(null);
+  const [showDebug, setShowDebug] = useState(false);
 
   const providers = listProviders();
   const currentProvider = getProviderById(ai.provider);
@@ -70,7 +83,7 @@ export default function AISettingsPage() {
       ai: {
         ...ai,
         apiKey: apiKey.trim(),
-        model: model.trim() || PROVIDER_DEFAULT_MODELS[ai.provider],
+        model: model.trim(),
         temperature,
         maxTokens,
       },
@@ -115,6 +128,8 @@ export default function AISettingsPage() {
       setTesting(false);
     }
   };
+
+  const hasDebugData = testResult?.availableModels && testResult.availableModels.length > 0;
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -196,16 +211,16 @@ export default function AISettingsPage() {
         {/* API key */}
         {PROVIDER_NEEDS_KEY[ai.provider] && (
           <SettingsCard
-            title="مفت API"
+            title="مفتاح API"
             description="مفت المصادقة للمزود المختار — يُخزّن محلياً فقط"
             icon={<Key className="h-5 w-5" />}
           >
-            <SettingRow label="مفت API" hint="لن يُرسل إلى أي خادم خارجي">
+            <SettingRow label="مفتاح API" hint="لن يُرسل إلى أي خادم خارجي">
               <input
                 type="password"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder="أدخل مفت API"
+                placeholder="أدخل مفتاح API"
                 className="w-full rounded-lg border border-input bg-background/60 px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
               />
             </SettingRow>
@@ -215,14 +230,17 @@ export default function AISettingsPage() {
         {/* Model + parameters */}
         <SettingsCard
           title="النموذج والمعاملات"
-          description="النموذج، الحرارة، والحد الأقصى للرموز"
+          description="النموذج يُكتشف تلقائياً من Google — اتركه فارغاً للاكتشاف التلقائي"
           icon={<Cpu className="h-5 w-5" />}
         >
-          <SettingRow label="النموذج" hint="معرّف النموذج لدى المزود">
+          <SettingRow
+            label="النموذج"
+            hint={model ? 'مكتشف تلقائياً' : 'سيُكتشف تلقائياً عند اختبار الاتصال'}
+          >
             <input
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder={PROVIDER_DEFAULT_MODELS[ai.provider]}
+              placeholder="اكتشف تلقائياً"
               className="w-full rounded-lg border border-input bg-background/60 px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
             />
           </SettingRow>
@@ -267,7 +285,7 @@ export default function AISettingsPage() {
         {/* Test connection */}
         <SettingsCard
           title="اختبار الاتصال"
-          description="تحقق من أن المزود والمفت يعملان"
+          description="تحقق من أن المزود والمفت يعملان — يكتشف النموذج تلقائياً"
           icon={<Wifi className="h-5 w-5" />}
         >
           <div className="flex flex-col gap-3">
@@ -295,6 +313,88 @@ export default function AISettingsPage() {
                   <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 )}
                 <span>{testResult.message}</span>
+              </div>
+            )}
+
+            {/* Debug panel */}
+            {hasDebugData && (
+              <div className="rounded-lg border-2 border-primary/20 bg-primary/5">
+                <button
+                  onClick={() => setShowDebug((v) => !v)}
+                  className="flex w-full items-center gap-2 px-4 py-3 text-sm font-bold text-primary transition-colors hover:bg-primary/10"
+                >
+                  {showDebug ? (
+                    <ChevronDown className="h-4 w-4" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4" />
+                  )}
+                  <ListChecks className="h-4 w-4" />
+                  لوحة تشخيص النماذج
+                  <span className="mr-auto text-xs font-normal text-muted-foreground">
+                    {testResult.availableModels!.length} نموذج
+                    {testResult.selectedModel && ` · المختار: ${testResult.selectedModel}`}
+                  </span>
+                </button>
+
+                {showDebug && (
+                  <div className="border-t-2 border-primary/15 p-4">
+                    {/* Selected model */}
+                    {testResult.selectedModel && (
+                      <div className="mb-4 flex items-center gap-2 rounded-lg bg-success/10 border border-success/30 px-3 py-2">
+                        <CheckCircle2 className="h-4 w-4 text-success shrink-0" />
+                        <span className="text-sm font-bold text-success">
+                          النموذج المختار: {testResult.selectedModel}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Available models list */}
+                    <div className="mb-2 text-xs font-black text-muted-foreground uppercase tracking-wide">
+                      النماذج المتاحة من Google
+                    </div>
+                    <div className="flex flex-col gap-1.5 max-h-64 overflow-y-auto">
+                      {testResult.availableModels!.map((m) => {
+                        const isSelected = m.name === testResult.selectedModel;
+                        return (
+                          <div
+                            key={m.name}
+                            className={cn(
+                              'flex items-start gap-2 rounded-md border px-3 py-2 text-xs',
+                              isSelected
+                                ? 'border-success/40 bg-success/10'
+                                : m.canGenerate
+                                  ? 'border-border/50 bg-background/40'
+                                  : 'border-destructive/20 bg-destructive/5'
+                            )}
+                          >
+                            {isSelected ? (
+                              <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 text-success shrink-0" />
+                            ) : m.canGenerate ? (
+                              <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                            ) : (
+                              <XCircle className="mt-0.5 h-3.5 w-3.5 text-destructive shrink-0" />
+                            )}
+                            <div className="flex flex-col gap-0.5">
+                              <span
+                                className={cn(
+                                  'font-bold',
+                                  m.canGenerate ? 'text-foreground' : 'text-muted-foreground'
+                                )}
+                              >
+                                {m.name}
+                              </span>
+                              {m.rejectionReason && (
+                                <span className="text-destructive/80 font-normal">
+                                  {m.rejectionReason}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

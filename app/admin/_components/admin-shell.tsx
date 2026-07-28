@@ -23,6 +23,8 @@ import {
   ShieldCheck,
   Puzzle,
   Bot,
+  Play,
+  PackageOpen,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -54,8 +56,12 @@ const NAV: NavItem[] = [
   { href: '/admin', label: 'لوحة التحكم', icon: LayoutDashboard, exact: true },
   { href: '/admin/categories', label: 'التصنيفات', icon: FolderTree },
   { href: '/admin/questions', label: 'بنك الأسئلة', icon: Database },
+  { href: '/admin/builder', label: 'بناء بنك الأسئلة', icon: Database },
+  { href: '/admin/packs', label: 'حزم الأسئلة', icon: PackageOpen },
   { href: '/admin/import', label: 'استيراد ذكي', icon: Sparkles },
   { href: '/admin/designer', label: 'مصمم الأسئلة', icon: Wand2 },
+  { href: '/admin/test', label: 'اختبار اللعبة', icon: Play },
+  { href: '/admin/validation', label: 'التحقق من اللعبة', icon: ShieldCheck },
   { href: '/admin/system', label: 'تشخيص النظام', icon: Activity },
 ];
 

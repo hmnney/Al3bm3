@@ -10,6 +10,7 @@ import {
   Check,
   X,
   Power,
+  Database,
 } from 'lucide-react';
 import {
   INTERACTION_TYPE_LABELS,
@@ -45,7 +46,13 @@ export default function InteractiveCategoriesPage() {
   const { toast } = useToast();
   const [editing, setEditing] = useState<InteractiveCategory | null>(null);
   const [showForm, setShowForm] = useState(false);
-  const [selected, setSelected] = useState<InteractiveCategory | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Keep the selected category fresh from context so dataset edits reflect live.
+  const selected = useMemo(
+    () => categories.find((c) => c.id === selectedId) ?? null,
+    [categories, selectedId]
+  );
 
   const handleAdd = () => {
     setEditing(null);
@@ -121,7 +128,7 @@ export default function InteractiveCategoriesPage() {
               onEdit={() => handleEdit(cat)}
               onDelete={() => handleDelete(cat)}
               onToggle={() => handleToggle(cat)}
-              onManage={() => setSelected(cat)}
+              onManage={() => setSelectedId(cat.id)}
             />
           ))}
         </div>
@@ -130,7 +137,7 @@ export default function InteractiveCategoriesPage() {
       {selected && (
         <CategoryDetail
           category={selected}
-          onClose={() => setSelected(null)}
+          onClose={() => setSelectedId(null)}
         />
       )}
 
@@ -170,6 +177,8 @@ function CategoryCard({
   const plugin = getPlugin(category.pluginId);
   const Icon = typeIcon(INTERACTION_TYPE_ICONS[category.interactionType]);
   const usesQR = plugin?.usesQR;
+  const hasAdminExtra = !!plugin?.AdminExtra;
+  const hasDataset = !!category.dataset;
 
   return (
     <div
@@ -204,11 +213,26 @@ function CategoryCard({
               يستخدم QR
             </span>
           )}
+          {hasDataset && (
+            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-1 font-bold text-emerald-500">
+              <Database className="h-3 w-3" />
+              بيانات
+            </span>
+          )}
         </div>
       )}
 
       <div className="mt-auto flex flex-wrap gap-2 pt-2">
-        {usesQR && (
+        {hasAdminExtra && (
+          <button
+            onClick={onManage}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-bold text-primary transition-all hover:bg-primary/20"
+          >
+            <Database className="h-3.5 w-3.5" />
+            إدارة البيانات
+          </button>
+        )}
+        {usesQR && !hasAdminExtra && (
           <button
             onClick={onManage}
             className="inline-flex items-center gap-1.5 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-bold text-primary transition-all hover:bg-primary/20"
@@ -256,7 +280,10 @@ function CategoryDetail({
   onClose: () => void;
 }) {
   const plugin = getPlugin(category.pluginId);
+  const { updateConfig, updateDataset } = useInteractive();
   const Icon = typeIcon(INTERACTION_TYPE_ICONS[category.interactionType]);
+
+  const AdminExtra = plugin?.AdminExtra;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
@@ -281,9 +308,21 @@ function CategoryDetail({
           </button>
         </div>
 
-        {plugin?.usesQR ? (
-          <QRSessionPanel category={category} />
-        ) : (
+        {/* Plugin AdminExtra (e.g. AI word generation panel) */}
+        {AdminExtra && (
+          <div className="mb-6">
+            <AdminExtra
+              category={category}
+              onUpdate={(config) => updateConfig(category.id, config)}
+              onUpdateDataset={(dataset) => updateDataset(category.id, dataset)}
+            />
+          </div>
+        )}
+
+        {/* QR session panel for plugins that use QR */}
+        {plugin?.usesQR && <QRSessionPanel category={category} />}
+
+        {!AdminExtra && !plugin?.usesQR && (
           <div className="flex flex-col items-center gap-3 py-10 text-center">
             <p className="text-sm text-muted-foreground">
               هذا النوع من التفاعل لا يستخدم QR — تُدار إعداداته من صفحة التعديل.

@@ -76,6 +76,33 @@ export interface CoachResult {
   report: string;
 }
 
+/** Request to generate playable words (not questions) for interactive categories. */
+export interface GenerateWordsRequest {
+  /** Main category/topic, e.g. "Anime", "Football", "Movies". */
+  topic: string;
+  /** How many words to generate. */
+  count: number;
+}
+
+/** Result of generating words — a flat list of short strings. */
+export type GenerateWordsResult = string[];
+
+/** Request to classify a single imported row (category/difficulty/points). */
+export interface ClassifyRequest {
+  question: string;
+  answer: string;
+  /** Existing category names, so the AI prefers matching one. */
+  existingCategories: string[];
+}
+
+/** Result of classifying a single row. */
+export interface ClassifyResult {
+  category: string;
+  difficulty: QuestionDifficulty;
+  points: 250 | 500 | 750;
+  confidence: number;
+}
+
 /** Request for system diagnostics. */
 export interface DiagnosticsRequest {
   categories: number;
@@ -95,7 +122,7 @@ export interface AIProviderConfig {
   provider: AIProviderId;
   /** API key for the active provider (stored locally). */
   apiKey: string;
-  /** Model identifier, e.g. 'gemini-1.5-flash'. */
+  /** Model identifier — discovered dynamically from the provider's API. */
   model: string;
   /** Sampling temperature 0–1. */
   temperature: number;
@@ -108,6 +135,15 @@ export interface AIProviderConfig {
 /** The built-in provider ids. */
 export type AIProviderId = 'gemini' | 'openrouter' | 'groq' | 'mock';
 
+/** A model returned by the provider's model-discovery API. */
+export interface ModelInfo {
+  name: string;
+  /** Whether this model supports generateContent. */
+  canGenerate: boolean;
+  /** Why this model was rejected, if it cannot generate content. */
+  rejectionReason?: string;
+}
+
 /** Arabic labels for providers. */
 export const PROVIDER_LABELS: Record<AIProviderId, string> = {
   gemini: 'Gemini',
@@ -116,11 +152,11 @@ export const PROVIDER_LABELS: Record<AIProviderId, string> = {
   mock: 'Mock AI',
 };
 
-/** Default model per provider. */
+/** Placeholder model per provider — replaced by dynamic discovery. */
 export const PROVIDER_DEFAULT_MODELS: Record<AIProviderId, string> = {
-  gemini: 'gemini-1.5-flash',
-  openrouter: 'openai/gpt-4o-mini',
-  groq: 'llama-3.1-8b-instant',
+  gemini: '',
+  openrouter: '',
+  groq: '',
   mock: 'mock-local',
 };
 
@@ -151,6 +187,10 @@ export interface AIProvider {
     /** If the provider auto-detected a working model, it's returned here so
      *  the caller can persist it into settings. */
     detectedModel?: string;
+    /** Debug info: every model the provider's API returned. */
+    availableModels?: ModelInfo[];
+    /** Debug info: the model that was selected for use. */
+    selectedModel?: string;
   }>;
 
   /** Analyze existing questions for quality, duplicates, gaps. */
@@ -182,4 +222,17 @@ export interface AIProvider {
     request: DiagnosticsRequest,
     config: AIProviderConfig
   ): Promise<DiagnosticsResult>;
+
+  /** Generate playable words (not questions) for interactive categories. */
+  generateWords(
+    request: GenerateWordsRequest,
+    config: AIProviderConfig
+  ): Promise<GenerateWordsResult>;
+
+  /** Classify a single imported row: best category, difficulty, points.
+   *  Used by Smart Import when the Category column is empty. */
+  classifyRow(
+    request: ClassifyRequest,
+    config: AIProviderConfig
+  ): Promise<ClassifyResult>;
 }

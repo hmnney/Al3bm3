@@ -12,6 +12,7 @@ import {
 import type {
   InteractiveCategory,
   PluginConfig,
+  PluginDataset,
   QRSession,
 } from './types';
 import {
@@ -45,6 +46,7 @@ interface InteractiveContextValue {
   updateCategory: (id: string, patch: Partial<InteractiveCategory>) => void;
   deleteCategory: (id: string) => void;
   updateConfig: (id: string, config: PluginConfig) => void;
+  updateDataset: (id: string, dataset: PluginDataset) => void;
   // QR sessions
   createSession: (input: {
     categoryId: string;
@@ -117,6 +119,12 @@ export function InteractiveProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  const updateDataset = useCallback((id: string, dataset: PluginDataset) => {
+    setCategories((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, dataset } : c))
+    );
+  }, []);
+
   const createSession = useCallback(
     (input: {
       categoryId: string;
@@ -163,6 +171,7 @@ export function InteractiveProvider({ children }: { children: ReactNode }) {
       updateCategory,
       deleteCategory,
       updateConfig,
+      updateDataset,
       createSession,
       regenerateQR,
       getSession,
@@ -177,6 +186,7 @@ export function InteractiveProvider({ children }: { children: ReactNode }) {
       updateCategory,
       deleteCategory,
       updateConfig,
+      updateDataset,
       createSession,
       regenerateQR,
       getSession,

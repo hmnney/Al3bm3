@@ -1,27 +1,31 @@
 import type { DesignerEngine } from './types';
 import { MockDesignerEngine } from './mock-designer';
+import { AIDesignerEngine } from './ai-designer';
+import { loadSettings } from '../../_lib/settings-store';
 
 /**
  * Designer factory — the single swap point for the AI Question Designer.
  *
- * The Designer is a completely isolated service. To plug in a real AI model
- * later (OpenAI, a local LLM, a Supabase edge function, etc.), create a class
- * that implements `DesignerEngine` and return it here instead of the mock.
- * No UI code needs to change.
+ * Returns the AI-backed engine when AI is enabled and configured, otherwise the
+ * local mock engine. The Designer UI only ever talks to the `DesignerEngine`
+ * interface, so no UI code changes.
  */
 
 let active: DesignerEngine | null = null;
 
 export function getDesigner(): DesignerEngine {
   if (!active) {
-    // Future: replace with a real AI-backed designer, e.g.
-    //   active = new OpenAiDesignerEngine({ apiKey: ... });
-    active = new MockDesignerEngine();
+    const ai = loadSettings().ai;
+    if (ai.enabled && ai.apiKey && ai.provider !== 'mock') {
+      active = new AIDesignerEngine();
+    } else {
+      active = new MockDesignerEngine();
+    }
   }
   return active;
 }
 
-/** Reset the cached designer (useful for tests / future config switches). */
+/** Reset the cached designer (useful for tests / config switches). */
 export function resetDesigner(): void {
   active = null;
 }

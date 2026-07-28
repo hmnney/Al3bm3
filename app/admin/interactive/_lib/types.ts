@@ -98,7 +98,30 @@ export interface InteractiveCategory {
   /** The plugin-specific config. */
   config: PluginConfig;
   enabled: boolean;
+  /**
+   * Plugin-owned dataset. Each interaction type keeps its own data shape here.
+   * Word Only stores { words: string[], usedWords: string[] }.
+   * Future plugins store their own structure (images[], audio[], etc.).
+   * The engine treats this as opaque — only the plugin reads/writes it.
+   */
+  dataset?: PluginDataset;
 }
+
+/**
+ * Discriminated union of dataset shapes per plugin.
+ * Each plugin declares its own dataset variant. The engine never inspects
+ * the contents — it only passes the dataset to the plugin's AdminExtra and
+ * gameplay components.
+ *
+ * To add a new plugin's dataset: add a variant here and handle it in the
+ * plugin's AdminExtra + gameplay component. No engine changes needed.
+ */
+export type PluginDataset =
+  | { kind: 'word-only'; words: string[]; usedWords: string[] }
+  | { kind: 'guess-image'; images: string[]; usedImages: string[] }
+  | { kind: 'guess-audio'; audio: string[]; usedAudio: string[] }
+  | { kind: 'guess-poster'; posters: string[]; usedPosters: string[] }
+  | { kind: 'guess-celebration'; videos: string[]; usedVideos: string[] };
 
 /** The interface every plugin must implement. */
 export interface InteractionPlugin {
@@ -117,5 +140,15 @@ export interface InteractionPlugin {
   /** Whether this plugin uses QR sessions. */
   usesQR?: boolean;
   /** Optional React node for plugin-specific admin UI (extra controls). */
-  AdminExtra?: (props: { category: InteractiveCategory; onUpdate: (config: PluginConfig) => void }) => ReactNode;
+  AdminExtra?: (props: {
+    category: InteractiveCategory;
+    onUpdate: (config: PluginConfig) => void;
+    onUpdateDataset: (dataset: PluginDataset) => void;
+  }) => ReactNode;
+  /** Optional gameplay component rendered inside the question modal. */
+  GameplayComponent?: (props: {
+    category: InteractiveCategory;
+    sessionUrl: string;
+    onResult: (result: 'current' | 'opponent' | 'none') => void;
+  }) => ReactNode;
 }

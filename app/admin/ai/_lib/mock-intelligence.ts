@@ -7,6 +7,7 @@ import type {
   DiagnosticsRequest,
   DiagnosticsResult,
   GenerateRequest,
+  GenerateWordsRequest,
   ImproveRequest,
   ImproveResult,
 } from './types';
@@ -139,6 +140,46 @@ export function mockCoach(request: CoachRequest): CoachResult {
     suggestions,
     report: `تحليل ${questions.length} سؤال: الجودة ${qualityScore(questions)}/100، التكرار ${dupes}، بدون إجابة ${missing}.`,
   };
+}
+
+/** Mock generate words. */
+export function mockGenerateWords(request: GenerateWordsRequest): string[] {
+  const { topic, count } = request;
+  const base = [
+    'عنصر ١', 'عنصر ٢', 'عنصر ٣', 'عنصر ٤', 'عنصر ٥',
+    'عنصر ٦', 'عنصر ٧', 'عنصر ٨', 'عنصر ٩', 'عنصر ١٠',
+    'عنصر ١١', 'عنصر ١٢', 'عنصر ١٣', 'عنصر ١٤', 'عنصر ١٥',
+    'عنصر ١٦', 'عنصر ١٧', 'عنصر ١٨', 'عنصر ١٩', 'عنصر ٢٠',
+    'عنصر ٢١', 'عنصر ٢٢', 'عنصر ٢٣', 'عنصر ٢٤', 'عنصر ٢٥',
+  ];
+  return base.slice(0, Math.min(count, base.length)).map((w) => `${w} (${topic})`);
+}
+
+/** Mock classify — local heuristic for Smart Import when AI is disabled. */
+export function mockClassify(
+  question: string,
+  existingCategories: string[]
+): { category: string; difficulty: QuestionDifficulty; points: 250 | 500 | 750; confidence: number } {
+  const q = question.trim();
+  let difficulty: QuestionDifficulty = 'medium';
+  let confidence = 60;
+
+  if (q.length < 25) {
+    difficulty = 'easy';
+    confidence = 70;
+  } else if (q.length > 80 || q.includes('؟') === false) {
+    difficulty = 'hard';
+    confidence = 55;
+  }
+
+  const points = difficulty === 'easy' ? 250 : difficulty === 'medium' ? 500 : 750;
+
+  let category = 'عام';
+  if (existingCategories.length > 0) {
+    category = existingCategories[0];
+  }
+
+  return { category, difficulty, points, confidence };
 }
 
 /** Mock diagnostics. */

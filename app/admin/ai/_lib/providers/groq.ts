@@ -3,11 +3,15 @@ import type {
   AIProviderConfig,
   AnalyzeRequest,
   AnalyzeResult,
+  ClassifyRequest,
+  ClassifyResult,
   CoachRequest,
   CoachResult,
   DiagnosticsRequest,
   DiagnosticsResult,
   GenerateRequest,
+  GenerateWordsRequest,
+  GenerateWordsResult,
   ImproveRequest,
   ImproveResult,
 } from '../types';
@@ -16,13 +20,17 @@ import {
   mockCoach,
   mockDiagnostics,
   mockGenerate,
+  mockGenerateWords,
   mockImprove,
+  mockClassify,
 } from '../mock-intelligence';
 import { callOpenAICompatible } from './openrouter';
 import {
   SYSTEM_INSTRUCTION,
   analyzePrompt,
+  classifyPrompt,
   generatePrompt,
+  generateWordsPrompt,
   improvePrompt,
   coachPrompt,
   diagnosticsPrompt,
@@ -43,11 +51,11 @@ export class GroqProvider implements AIProvider {
   readonly name = 'Groq';
   needsKey = true;
 
-  async testConnection(config: AIProviderConfig): Promise<{ ok: boolean; message: string }> {
+  async testConnection(config: AIProviderConfig): Promise<{ ok: boolean; message: string; detectedModel?: string }> {
     if (!config.apiKey) return { ok: false, message: 'مفت API مطلوب لـ Groq.' };
     try {
       await callOpenAICompatible(GROQ_BASE, 'أجب بكلمة "موافق" فقط.', config);
-      return { ok: true, message: 'تم الاتصال بـ Groq بنجاح.' };
+      return { ok: true, message: 'تم الاتصال بـ Groq بنجاح.', detectedModel: config.model };
     } catch (e) {
       return { ok: false, message: `فشل الاتصال: ${(e as Error).message}` };
     }
@@ -100,6 +108,26 @@ export class GroqProvider implements AIProvider {
       return parseJsonLoose<DiagnosticsResult>(text) ?? mockDiagnostics(request);
     } catch {
       return mockDiagnostics(request);
+    }
+  }
+
+  async generateWords(request: GenerateWordsRequest, config: AIProviderConfig): Promise<GenerateWordsResult> {
+    if (!config.enabled || !config.apiKey) return mockGenerateWords(request);
+    try {
+      const text = await callOpenAICompatible(GROQ_BASE, generateWordsPrompt(request), config, undefined, SYSTEM_INSTRUCTION);
+      return parseJsonLoose<GenerateWordsResult>(text) ?? mockGenerateWords(request);
+    } catch {
+      return mockGenerateWords(request);
+    }
+  }
+
+  async classifyRow(request: ClassifyRequest, config: AIProviderConfig): Promise<ClassifyResult> {
+    if (!config.enabled || !config.apiKey) return mockClassify(request.question, request.existingCategories);
+    try {
+      const text = await callOpenAICompatible(GROQ_BASE, classifyPrompt(request), config, undefined, SYSTEM_INSTRUCTION);
+      return parseJsonLoose<ClassifyResult>(text) ?? mockClassify(request.question, request.existingCategories);
+    } catch {
+      return mockClassify(request.question, request.existingCategories);
     }
   }
 }

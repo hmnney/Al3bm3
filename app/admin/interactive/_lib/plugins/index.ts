@@ -2,6 +2,7 @@ import { registerPlugin } from '../registry';
 import { normalPlugin } from './normal';
 import { qrBasePlugin } from './qr';
 import { wordlessPlugin } from './wordless';
+import { wordOnlyPlugin } from './word-only';
 import { audioPlugin } from './audio';
 import { videoPlugin } from './video';
 import { privateScreenPlugin } from './private-screen';
@@ -20,7 +21,8 @@ export function registerAllPlugins(): void {
   if (registered) return;
   registerPlugin(normalPlugin);
   registerPlugin(qrBasePlugin);
-  registerPlugin(wordlessPlugin); // "ولا كلمة" — first plugin
+  registerPlugin(wordlessPlugin); // "ولا كلمة" — manual secret word
+  registerPlugin(wordOnlyPlugin); // "ولا كلمة" — AI-generated words
   registerPlugin(audioPlugin);
   registerPlugin(videoPlugin);
   registerPlugin(privateScreenPlugin);

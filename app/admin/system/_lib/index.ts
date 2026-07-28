@@ -1,17 +1,24 @@
 import type { DiagnosticsEngine } from './types';
 import { MockDiagnosticsEngine } from './mock-engine';
+import { AIDiagnosticsEngine } from './ai-engine';
+import { loadSettings } from '../../_lib/settings-store';
 
 /**
  * Diagnostics factory — the single swap point for the System Diagnostics
- * backend. To plug in a real AI model later, create a class implementing
- * `DiagnosticsEngine` and return it here instead of the mock. No UI changes.
+ * backend. Returns the AI-backed engine when AI is enabled and configured,
+ * otherwise the local mock engine. No UI changes.
  */
 
 let active: DiagnosticsEngine | null = null;
 
 export function getDiagnostics(): DiagnosticsEngine {
   if (!active) {
-    active = new MockDiagnosticsEngine();
+    const ai = loadSettings().ai;
+    if (ai.enabled && ai.apiKey && ai.provider !== 'mock') {
+      active = new AIDiagnosticsEngine();
+    } else {
+      active = new MockDiagnosticsEngine();
+    }
   }
   return active;
 }

@@ -4,11 +4,15 @@ import type {
   AIQuestion,
   AnalyzeRequest,
   AnalyzeResult,
+  ClassifyRequest,
+  ClassifyResult,
   CoachRequest,
   CoachResult,
   DiagnosticsRequest,
   DiagnosticsResult,
   GenerateRequest,
+  GenerateWordsRequest,
+  GenerateWordsResult,
   ImproveRequest,
   ImproveResult,
 } from '../types';
@@ -17,7 +21,9 @@ import {
   mockCoach,
   mockDiagnostics,
   mockGenerate,
+  mockGenerateWords,
   mockImprove,
+  mockClassify,
 } from '../mock-intelligence';
 
 /**
@@ -30,8 +36,8 @@ export class MockAIProvider implements AIProvider {
   readonly name = 'Mock AI';
   needsKey = false;
 
-  async testConnection(_config: AIProviderConfig): Promise<{ ok: boolean; message: string }> {
-    return { ok: true, message: 'المحرك المحلي يعمل دائماً — لا يحتاج اتصالاً.' };
+  async testConnection(_config: AIProviderConfig): Promise<{ ok: boolean; message: string; detectedModel?: string }> {
+    return { ok: true, message: 'المحرك المحلي يعمل دائماً — لا يحتاج اتصالاً.', detectedModel: 'mock-local' };
   }
 
   async analyzeQuestions(request: AnalyzeRequest, _config: AIProviderConfig): Promise<AnalyzeResult> {
@@ -52,5 +58,13 @@ export class MockAIProvider implements AIProvider {
 
   async runDiagnostics(request: DiagnosticsRequest, _config: AIProviderConfig): Promise<DiagnosticsResult> {
     return mockDiagnostics(request);
+  }
+
+  async generateWords(request: GenerateWordsRequest, _config: AIProviderConfig): Promise<GenerateWordsResult> {
+    return mockGenerateWords(request);
+  }
+
+  async classifyRow(request: ClassifyRequest, _config: AIProviderConfig): Promise<ClassifyResult> {
+    return mockClassify(request.question, request.existingCategories);
   }
 }

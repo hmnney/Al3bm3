@@ -1,26 +1,25 @@
 import type { AICoach } from './types';
 import { MockAICoach } from './mock-coach';
+import { AICoachAdapter } from './ai-coach';
+import { loadSettings } from '../../../_lib/settings-store';
 
 /**
  * Coach factory — the single swap point for the AI Coach backend.
  *
- * The Coach is a separate layer from the Analyzer. It consumes analyzer
- * results and never replaces them. To plug in a real AI model later (OpenAI,
- * a local LLM, a Supabase edge function, etc.), create a class that
- * implements `AICoach` and return it here instead of the mock. No UI code
- * needs to change.
- *
- * The active coach is read once per coaching run and held in module scope so
- * the same instance is reused.
+ * Returns the AI-backed coach when AI is enabled and configured, otherwise the
+ * local mock coach. The UI only ever talks to the `AICoach` interface.
  */
 
 let active: AICoach | null = null;
 
 export function getCoach(): AICoach {
   if (!active) {
-    // Future: replace with a real AI-backed coach, e.g.
-    //   active = new OpenAiCoach({ apiKey: ... });
-    active = new MockAICoach();
+    const ai = loadSettings().ai;
+    if (ai.enabled && ai.apiKey && ai.provider !== 'mock') {
+      active = new AICoachAdapter();
+    } else {
+      active = new MockAICoach();
+    }
   }
   return active;
 }

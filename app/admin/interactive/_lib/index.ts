@@ -14,6 +14,7 @@ export type {
   PluginConfig,
   PluginConfigField,
   PluginConfigSchema,
+  PluginDataset,
   QRSession,
   QRSessionStatus,
 } from './types';
