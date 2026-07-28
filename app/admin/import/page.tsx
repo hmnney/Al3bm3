@@ -21,6 +21,9 @@ import {
   AlertCircle,
   Brain,
   Wand2,
+  Image as ImageIcon,
+  Video as VideoIcon,
+  AudioLines,
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAdmin } from '../_lib/admin-context';
@@ -447,6 +450,7 @@ export default function AdminImportPage() {
                     <TableHead className="text-right text-xs font-bold uppercase text-muted-foreground">الثقة %</TableHead>
                     <TableHead className="text-right text-xs font-bold uppercase text-muted-foreground">السؤال</TableHead>
                     <TableHead className="text-right text-xs font-bold uppercase text-muted-foreground">الإجابة</TableHead>
+                    <TableHead className="text-center text-xs font-bold uppercase text-muted-foreground">الوسائط</TableHead>
                     <TableHead className="text-right text-xs font-bold uppercase text-muted-foreground">الحالة</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -493,6 +497,9 @@ export default function AdminImportPage() {
                         </TableCell>
                         <TableCell className="max-w-xs truncate text-muted-foreground">
                           {v.row.answer || <span className="text-warning">إجابة مفقودة</span>}
+                        </TableCell>
+                        <TableCell>
+                          <MediaPreview image={v.row.image} video={v.row.video} audio={v.row.audio} />
                         </TableCell>
                         <TableCell><RowStatusBadge status={v.status} issues={v.issues} /></TableCell>
                       </TableRow>
@@ -730,5 +737,34 @@ function ResolutionButton({ active, onClick, icon: Icon, label, tone }: {
     <button type="button" onClick={onClick} className={cn('inline-flex items-center gap-1.5 rounded-lg border-2 px-3 py-1.5 text-xs font-bold transition-all', tones[tone])}>
       <Icon className="h-3.5 w-3.5" /> {label}
     </button>
+  );
+}
+
+function MediaPreview({ image, video, audio }: { image: string; video: string; audio: string }) {
+  const hasAny = image.trim() || video.trim() || audio.trim();
+  if (!hasAny) {
+    return <span className="text-xs text-muted-foreground/50">—</span>;
+  }
+  return (
+    <div className="flex items-center gap-1.5">
+      {image.trim() && (
+        <img
+          src={image.trim()}
+          alt="preview"
+          className="h-10 w-10 rounded-md border border-border/50 object-cover"
+          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+        />
+      )}
+      {video.trim() && (
+        <span className="flex h-8 w-8 items-center justify-center rounded-md border border-border/50 bg-primary/10 text-primary" title={video.trim()}>
+          <VideoIcon className="h-4 w-4" />
+        </span>
+      )}
+      {audio.trim() && (
+        <span className="flex h-8 w-8 items-center justify-center rounded-md border border-border/50 bg-secondary/10 text-secondary" title={audio.trim()}>
+          <AudioLines className="h-4 w-4" />
+        </span>
+      )}
+    </div>
   );
 }

@@ -61,6 +61,10 @@ export async function runImport(
   let errors = 0;
   let newCategories = 0;
   let matchedCategories = 0;
+  let importedImages = 0;
+  let importedVideos = 0;
+  let importedAudio = 0;
+  let skippedMedia = 0;
 
   const createdCategoryNames: string[] = [];
   const matchedCategoryNames: string[] = [];
@@ -149,15 +153,49 @@ export async function runImport(
       continue;
     }
 
+    const cleanImage = row.image.trim();
+    const cleanAudio = row.audio.trim();
+    const cleanVideo = row.video.trim();
+
+    // Validate media extensions before saving — skip invalid ones.
+    let image: string | undefined;
+    let audio: string | undefined;
+    let video: string | undefined;
+
+    if (cleanImage) {
+      if (isValidMediaExtension(cleanImage, 'image')) {
+        image = cleanImage;
+        importedImages++;
+      } else {
+        skippedMedia++;
+      }
+    }
+    if (cleanAudio) {
+      if (isValidMediaExtension(cleanAudio, 'audio')) {
+        audio = cleanAudio;
+        importedAudio++;
+      } else {
+        skippedMedia++;
+      }
+    }
+    if (cleanVideo) {
+      if (isValidMediaExtension(cleanVideo, 'video')) {
+        video = cleanVideo;
+        importedVideos++;
+      } else {
+        skippedMedia++;
+      }
+    }
+
     callbacks.createQuestion({
       categoryId,
       difficulty: effectiveDifficulty,
       points: effectivePoints,
       question: row.question.trim(),
       answer: row.answer.trim(),
-      image: row.image.trim() || undefined,
-      audio: row.audio.trim() || undefined,
-      video: row.video.trim() || undefined,
+      image,
+      audio,
+      video,
     });
 
     imported++;
@@ -189,7 +227,33 @@ export async function runImport(
     matchedCategories,
     createdCategoryNames,
     matchedCategoryNames,
+    importedImages,
+    importedVideos,
+    importedAudio,
+    skippedMedia,
   };
+}
+
+/** Valid file extensions per media type. */
+const VALID_EXTENSIONS: Record<'image' | 'video' | 'audio', string[]> = {
+  image: ['jpg', 'jpeg', 'png', 'webp'],
+  video: ['mp4', 'webm'],
+  audio: ['mp3', 'wav', 'ogg'],
+};
+
+/** Check if a media URL has a valid extension for its type. */
+function isValidMediaExtension(url: string, type: 'image' | 'video' | 'audio'): boolean {
+  try {
+    const u = new URL(url);
+    if (u.protocol === 'data:') {
+      const mime = url.slice(0, url.indexOf(','));
+      return VALID_EXTENSIONS[type].some((ext) => mime.includes(`/${ext}`));
+    }
+    const pathname = u.pathname.toLowerCase();
+    return VALID_EXTENSIONS[type].some((ext) => pathname.endsWith('.' + ext));
+  } catch {
+    return false;
+  }
 }
 
 function parsePoints(raw: string): 250 | 500 | 750 | undefined {

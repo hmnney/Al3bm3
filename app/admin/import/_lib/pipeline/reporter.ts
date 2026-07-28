@@ -17,6 +17,10 @@ export interface ReportStat {
 export function formatReport(report: ImportReport): ReportStat[] {
   return [
     { label: 'مستورد', value: report.imported, tone: 'success' },
+    { label: 'صور مستوردة', value: report.importedImages, tone: 'info' },
+    { label: 'فيديوهات مستوردة', value: report.importedVideos, tone: 'info' },
+    { label: 'ملفات صوتية مستوردة', value: report.importedAudio, tone: 'info' },
+    { label: 'وسائط متخطّاة', value: report.skippedMedia, tone: 'warning' },
     { label: 'متخطّى', value: report.skipped, tone: 'neutral' },
     { label: 'مكررات', value: report.duplicates, tone: 'warning' },
     { label: 'تحذيرات', value: report.warnings, tone: 'warning' },

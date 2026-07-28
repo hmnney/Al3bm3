@@ -65,6 +65,12 @@ export interface ImportReport {
   createdCategoryNames: string[];
   /** Names of categories that were matched to existing ones. */
   matchedCategoryNames: string[];
+  /** Media counts. */
+  importedImages: number;
+  importedVideos: number;
+  importedAudio: number;
+  /** Media URLs skipped due to invalid format/extension. */
+  skippedMedia: number;
 }
 
 /** Progress callback during import. */
