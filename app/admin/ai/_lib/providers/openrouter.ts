@@ -18,6 +18,16 @@ import {
   mockGenerate,
   mockImprove,
 } from '../mock-intelligence';
+import {
+  SYSTEM_INSTRUCTION,
+  analyzePrompt,
+  generatePrompt,
+  improvePrompt,
+  coachPrompt,
+  diagnosticsPrompt,
+  TEST_CONNECTION_PROMPT,
+} from '../prompts';
+import { parseJsonLoose, fetchWithTimeout } from '../json-utils';
 
 /**
  * OpenRouter provider — OpenAI-compatible chat completions API.
@@ -29,60 +39,66 @@ import {
  */
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
+const TIMEOUT_MS = 30_000;
 
 interface ChatResponse {
   choices?: Array<{ message?: { content?: string } }>;
   error?: { message?: string };
 }
 
-function buildPrompt(task: string, payload: unknown): string {
-  return `${task}\n\nأعد النتيجة بصيغة JSON صالحة فقط بدون أي نص إضافي.\n\nالبيانات:\n${JSON.stringify(payload)}`;
-}
-
-function parseJsonLoose<T>(text: string): T | null {
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    const match = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (match) {
-      try {
-        return JSON.parse(match[1]) as T;
-      } catch {
-        /* ignore */
-      }
-    }
-    return null;
-  }
-}
-
-/** OpenAI-compatible chat call. Shared by OpenRouter + Groq. */
+/** OpenAI-compatible chat call with timeout + retry. Shared by OpenRouter + Groq. */
 export async function callOpenAICompatible(
   baseUrl: string,
   prompt: string,
   config: AIProviderConfig,
-  extraHeaders: Record<string, string> = {}
+  extraHeaders: Record<string, string> = {},
+  systemInstruction: string = SYSTEM_INSTRUCTION
 ): Promise<string> {
   const url = `${baseUrl}/chat/completions`;
+  const messages = [
+    { role: 'system', content: systemInstruction },
+    { role: 'user', content: prompt },
+  ];
   const body = {
     model: config.model,
-    messages: [{ role: 'user', content: prompt }],
+    messages,
     temperature: config.temperature,
     max_tokens: config.maxTokens,
+    response_format: { type: 'json_object' },
   };
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.apiKey}`,
-      ...extraHeaders,
-    },
-    body: JSON.stringify(body),
-  });
-  const json = (await res.json()) as ChatResponse;
-  if (!res.ok || json.error) {
-    throw new Error(json.error?.message ?? `API error ${res.status}`);
+
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetchWithTimeout(
+        url,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${config.apiKey}`,
+            ...extraHeaders,
+          },
+          body: JSON.stringify(body),
+        },
+        TIMEOUT_MS
+      );
+      const json = (await res.json()) as ChatResponse;
+      if (!res.ok || json.error) {
+        const msg = json.error?.message ?? `API error ${res.status}`;
+        lastError = new Error(msg);
+        if (res.status === 400 || res.status === 401 || res.status === 403) throw lastError;
+        if (attempt === 0) continue;
+        throw lastError;
+      }
+      return json.choices?.[0]?.message?.content ?? '';
+    } catch (e) {
+      lastError = e as Error;
+      if (attempt === 1) throw lastError;
+      continue;
+    }
   }
-  return json.choices?.[0]?.message?.content ?? '';
+  throw lastError ?? new Error('Unknown error');
 }
 
 export class OpenRouterProvider implements AIProvider {
@@ -93,7 +109,7 @@ export class OpenRouterProvider implements AIProvider {
   async testConnection(config: AIProviderConfig): Promise<{ ok: boolean; message: string }> {
     if (!config.apiKey) return { ok: false, message: 'مفت API مطلوب لـ OpenRouter.' };
     try {
-      await callOpenAICompatible(OPENROUTER_BASE, 'أجب بكلمة "موافق" فقط.', config, {
+      await callOpenAICompatible(OPENROUTER_BASE, TEST_CONNECTION_PROMPT, config, {
         'HTTP-Referer': typeof window !== 'undefined' ? window.location.origin : 'https://localhost',
       });
       return { ok: true, message: 'تم الاتصال بـ OpenRouter بنجاح.' };
@@ -105,7 +121,7 @@ export class OpenRouterProvider implements AIProvider {
   async analyzeQuestions(request: AnalyzeRequest, config: AIProviderConfig): Promise<AnalyzeResult> {
     if (!config.enabled || !config.apiKey) return mockAnalyze(request);
     try {
-      const text = await callOpenAICompatible(OPENROUTER_BASE, buildPrompt('حلل الأسئلة وأعد: total, duplicates, missingAnswers, shortQuestions, qualityScore (0-100), issues (مصفوفة عربية).', request), config);
+      const text = await callOpenAICompatible(OPENROUTER_BASE, analyzePrompt(request), config);
       return parseJsonLoose<AnalyzeResult>(text) ?? mockAnalyze(request);
     } catch {
       return mockAnalyze(request);
@@ -115,7 +131,7 @@ export class OpenRouterProvider implements AIProvider {
   async generateQuestions(request: GenerateRequest, config: AIProviderConfig): Promise<ReturnType<typeof mockGenerate>> {
     if (!config.enabled || !config.apiKey) return mockGenerate(request);
     try {
-      const text = await callOpenAICompatible(OPENROUTER_BASE, buildPrompt('ولّد أسئلة. أعد مصفوفة {question, answer, difficulty}.', request), config);
+      const text = await callOpenAICompatible(OPENROUTER_BASE, generatePrompt(request), config);
       return parseJsonLoose<ReturnType<typeof mockGenerate>>(text) ?? mockGenerate(request);
     } catch {
       return mockGenerate(request);
@@ -125,7 +141,7 @@ export class OpenRouterProvider implements AIProvider {
   async improveQuestion(request: ImproveRequest, config: AIProviderConfig): Promise<ImproveResult> {
     if (!config.enabled || !config.apiKey) return mockImprove(request);
     try {
-      const text = await callOpenAICompatible(OPENROUTER_BASE, buildPrompt('حسّن الصياغة. أعد {question, answer, changes (مصفوفة عربية)}.', request), config);
+      const text = await callOpenAICompatible(OPENROUTER_BASE, improvePrompt(request), config);
       return parseJsonLoose<ImproveResult>(text) ?? mockImprove(request);
     } catch {
       return mockImprove(request);
@@ -135,7 +151,7 @@ export class OpenRouterProvider implements AIProvider {
   async coachQuestions(request: CoachRequest, config: AIProviderConfig): Promise<CoachResult> {
     if (!config.enabled || !config.apiKey) return mockCoach(request);
     try {
-      const text = await callOpenAICompatible(OPENROUTER_BASE, buildPrompt('درّب الأسئلة. أعد {suggestions [{questionId?, type, message}], report}.', request), config);
+      const text = await callOpenAICompatible(OPENROUTER_BASE, coachPrompt(request), config);
       return parseJsonLoose<CoachResult>(text) ?? mockCoach(request);
     } catch {
       return mockCoach(request);
@@ -145,7 +161,7 @@ export class OpenRouterProvider implements AIProvider {
   async runDiagnostics(request: DiagnosticsRequest, config: AIProviderConfig): Promise<DiagnosticsResult> {
     if (!config.enabled || !config.apiKey) return mockDiagnostics(request);
     try {
-      const text = await callOpenAICompatible(OPENROUTER_BASE, buildPrompt('شخّص الصحة. أعد {healthScore (0-100), issues (مصفوفة), suggestions (مصفوفة)}.', request), config);
+      const text = await callOpenAICompatible(OPENROUTER_BASE, diagnosticsPrompt(request), config);
       return parseJsonLoose<DiagnosticsResult>(text) ?? mockDiagnostics(request);
     } catch {
       return mockDiagnostics(request);
