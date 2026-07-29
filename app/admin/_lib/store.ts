@@ -1,68 +1,69 @@
 import { CATEGORIES } from '@/lib/constants';
-import { QUESTION_BANK } from '@/data';
-import type { AdminCategory, AdminData, AdminQuestion } from './types';
-import { toAdminCategory, toAdminQuestion } from './types';
+import type { AdminCategory, AdminData } from './types';
+import { toAdminCategory } from './types';
+import {
+  ensureStateBucket,
+  getState,
+  putState,
+  readCache,
+  writeCache,
+} from '@/lib/state-persistence';
 
 /**
- * Local-only admin store. Seeds itself from the existing in-memory question
- * bank + category catalog on first run, then persists every mutation to
- * localStorage so admin edits survive reloads. No database, no network.
- *
- * Future features (Excel import, AI generation, Supabase sync) replace this
- * module's internals — the React context above it exposes a stable CRUD API
- * so the UI never needs to change.
+ * Admin data store. The persisted admin question bank (localStorage cache +
+ * Supabase Storage) is the ONLY source of questions for the game — there is
+ * no static demo fallback. On first run the store seeds only the category
+ * catalog (names/glyphs), with an empty question list; the admin then adds or
+ * imports questions.
  */
 
 const STORAGE_KEY = 'admin-data-v1';
+const REMOTE_KEY = 'admin-data';
 
-/** Build the initial dataset from the game's existing question bank. */
+/** Build the initial dataset: category catalog, no questions. */
 function seed(): AdminData {
   const categories: AdminCategory[] = CATEGORIES.map(toAdminCategory);
-  const questions: AdminQuestion[] = Object.values(QUESTION_BANK)
-    .flat()
-    .map(toAdminQuestion);
-  return { categories, questions };
+  return { categories, questions: [] };
 }
 
-/** Read the persisted dataset, or seed + persist on first run. */
+/** Synchronous load from localStorage cache (instant hydration). */
 export function loadAdminData(): AdminData {
   if (typeof window === 'undefined') return seed();
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      const initial = seed();
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
-      return initial;
-    }
-    const parsed = JSON.parse(raw) as AdminData;
-    if (!parsed.categories || !parsed.questions) throw new Error('bad shape');
-    return parsed;
-  } catch {
-    // Corrupt or missing — reseed so the panel always has data.
-    const fresh = seed();
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(fresh));
-    } catch {
-      /* ignore quota errors */
-    }
-    return fresh;
-  }
+  const cached = readCache<AdminData>(STORAGE_KEY);
+  if (cached && cached.categories && cached.questions) return cached;
+  const initial = seed();
+  writeCache(STORAGE_KEY, initial);
+  return initial;
 }
 
-/** Persist the dataset. Silently ignores quota/access errors. */
+/** Async load from Supabase Storage (durable source of truth). Falls back to cache/seed. */
+export async function loadAdminDataRemote(): Promise<AdminData> {
+  await ensureStateBucket();
+  const remote = await getState<AdminData>(REMOTE_KEY);
+  if (remote && remote.categories && remote.questions) {
+    writeCache(STORAGE_KEY, remote);
+    return remote;
+  }
+  const local = loadAdminData();
+  await putState(REMOTE_KEY, local);
+  return local;
+}
+
+/** Persist to localStorage cache (synchronous). */
 export function saveAdminData(data: AdminData): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch {
-    /* ignore */
-  }
+  writeCache(STORAGE_KEY, data);
 }
 
-/** Wipe the persisted dataset and reseed from the question bank. */
+/** Persist to Supabase Storage (durable). Fire-and-forget; callers don't await. */
+export async function saveAdminDataRemote(data: AdminData): Promise<void> {
+  await putState(REMOTE_KEY, data);
+}
+
+/** Wipe both stores and reseed the category catalog (questions stay empty). */
 export function resetAdminData(): AdminData {
   const fresh = seed();
   saveAdminData(fresh);
+  void saveAdminDataRemote(fresh);
   return fresh;
 }
 

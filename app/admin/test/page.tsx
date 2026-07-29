@@ -27,6 +27,9 @@ import { QuestionModal } from '@/components/game/question-modal';
 import { GameButton } from '@/components/game/game-button';
 import { CATEGORY_MAP, TEAM_COLORS, TEAM_COLOR_MAP, REQUIRED_CATEGORY_COUNT, POINT_VALUES } from '@/lib/constants';
 import { drawQuestionForSlot } from '@/data';
+import { useAdmin } from '../_lib/admin-context';
+import type { AdminQuestion } from '../_lib/types';
+import type { Question } from '@/lib/types';
 import type {
   ActiveQuestion,
   AnswerRecord,
@@ -48,6 +51,20 @@ export default function TestModePage() {
   const game = useGame();
   const { state, setTeams, startMatch, markSlotCompleted, markQuestionUsed, addScore, switchTurn, recordAnswer, resetAll } = game;
   const { categories: interactiveCategories, createSession, sessions } = useInteractive();
+  const { data: adminData } = useAdmin();
+
+  // Build the question pool from the persisted admin store — same source as the real game.
+  const questionPool: Question[] = adminData.questions.map((q: AdminQuestion) => ({
+    id: q.id,
+    categoryId: q.categoryId as CategoryId,
+    difficulty: q.difficulty,
+    points: q.points,
+    question: q.question,
+    answer: q.answer,
+    image: q.image,
+    audio: q.audio,
+    video: q.video,
+  }));
 
   const [phase, setPhase] = useState<TestPhase>('setup');
   const [activeQuestion, setActiveQuestion] = useState<ActiveQuestion | null>(null);
@@ -112,7 +129,7 @@ export default function TestModePage() {
       return;
     }
 
-    const question = drawQuestionForSlot(categoryId, points, state.usedQuestionIds);
+    const question = drawQuestionForSlot(categoryId, points, state.usedQuestionIds, questionPool);
     if (!question) return;
     markQuestionUsed(question.id);
     setActiveQuestion({ question, team });

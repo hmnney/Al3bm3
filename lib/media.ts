@@ -24,18 +24,25 @@ export function categoryImageUrl(categoryId: CategoryId): string {
   return `/category-images/${categoryId}.jpg`;
 }
 
-/** Resolve a question image URL (stored under /public/images). */
+/** Resolve a question image URL.
+ *  - Absolute URLs (http/https/data:blob:) pass through unchanged.
+ *  - Root-relative paths ("/foo.jpg") pass through unchanged.
+ *  - Bare filenames ("foo.jpg") resolve to /images/foo.jpg.
+ */
 export function questionImageUrl(path: string): string {
+  if (/^(https?:|data:|blob:)/i.test(path)) return path;
   return path.startsWith('/') ? path : `/images/${path}`;
 }
 
-/** Resolve a question audio URL (stored under /public/audio). */
+/** Resolve a question audio URL. Same rules as questionImageUrl. */
 export function questionAudioUrl(path: string): string {
+  if (/^(https?:|data:|blob:)/i.test(path)) return path;
   return path.startsWith('/') ? path : `/audio/${path}`;
 }
 
-/** Resolve a question video URL (stored under /public/video). */
+/** Resolve a question video URL. Same rules as questionImageUrl. */
 export function questionVideoUrl(path: string): string {
+  if (/^(https?:|data:|blob:)/i.test(path)) return path;
   return path.startsWith('/') ? path : `/video/${path}`;
 }
 

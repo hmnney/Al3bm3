@@ -5,7 +5,7 @@ import { Play, Pause, RotateCcw, Volume2, AudioLines } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface AudioPlayerProps {
-  /** Root-relative URL, e.g. "/audio/foo.mp3". */
+  /** Audio URL — absolute (https://) or root-relative (/audio/foo.mp3). */
   src: string;
   label?: string;
   className?: string;
@@ -19,14 +19,11 @@ function formatTime(sec: number): string {
 }
 
 /**
- * Professional local audio player for question media.
+ * Audio player for question media.
  *
- * - Custom play/pause/reset controls (no native skin — matches the app theme).
- * - Shimmer skeleton while the file buffers.
- * - On error (missing file, unsupported codec) it shows a quiet fallback and
- *   never throws — the rest of the modal stays fully usable.
- * - Lazy: the <audio> element only mounts once the user presses play, so we
- *   don't fetch audio files that nobody listens to.
+ * The <audio> element is always mounted (hidden) so the ref is never null
+ * when the user presses play. Event listeners are tied to [src], not to
+ * status, so they stay attached across loading → ready transitions.
  */
 export function AudioPlayer({ src, label = 'صوت', className }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -37,52 +34,60 @@ export function AudioPlayer({ src, label = 'صوت', className }: AudioPlayerPro
   const [current, setCurrent] = useState(0);
   const [duration, setDuration] = useState(0);
 
-  // Reset state when the source changes.
+  // Reset state + attach listeners whenever src changes.
   useEffect(() => {
     setStatus('idle');
     setPlaying(false);
     setCurrent(0);
     setDuration(0);
-  }, [src]);
 
-  // Track playback position + duration.
-  useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
+
+    el.src = src;
+    el.load();
+
     const onTime = () => setCurrent(el.currentTime);
     const onMeta = () => {
       setDuration(el.duration || 0);
       setStatus('ready');
     };
+    const onCanPlay = () => setStatus('ready');
     const onEnded = () => setPlaying(false);
-    const onErr = () => setStatus('error');
+    const onErr = () => {
+      console.error('[AudioPlayer] error loading:', src, el.error);
+      setStatus('error');
+      setPlaying(false);
+    };
+
     el.addEventListener('timeupdate', onTime);
     el.addEventListener('loadedmetadata', onMeta);
+    el.addEventListener('canplay', onCanPlay);
     el.addEventListener('ended', onEnded);
     el.addEventListener('error', onErr);
+
     return () => {
       el.removeEventListener('timeupdate', onTime);
       el.removeEventListener('loadedmetadata', onMeta);
+      el.removeEventListener('canplay', onCanPlay);
       el.removeEventListener('ended', onEnded);
       el.removeEventListener('error', onErr);
     };
-  }, [status === 'loading']);
+  }, [src]);
 
   const togglePlay = () => {
     if (status === 'error') return;
-    if (status === 'idle') {
-      setStatus('loading');
-    }
     const el = audioRef.current;
     if (!el) return;
     if (playing) {
       el.pause();
       setPlaying(false);
     } else {
+      if (status === 'idle') setStatus('loading');
       el.play()
         .then(() => setPlaying(true))
-        .catch(() => {
-          // Autoplay rejection or load failure — surface as error-safe state.
+        .catch((e) => {
+          console.error('[AudioPlayer] play() failed:', src, e);
           setStatus((prev) => (prev === 'error' ? prev : 'ready'));
           setPlaying(false);
         });
@@ -106,7 +111,7 @@ export function AudioPlayer({ src, label = 'صوت', className }: AudioPlayerPro
     return (
       <div
         className={cn(
-          'flex w-full items-center gap-3 rounded-2xl border-2 border-border/60 bg-muted/30 px-5 py-4 text-muted-foreground',
+          'flex w-full items-center gap-3 rounded-2xl border-2 border-destructive/40 bg-destructive/5 px-5 py-4 text-destructive',
           className
         )}
       >
@@ -123,10 +128,8 @@ export function AudioPlayer({ src, label = 'صوت', className }: AudioPlayerPro
         className
       )}
     >
-      {/* Hidden audio element — mounted lazily after first interaction */}
-      {(status === 'loading' || status === 'ready') && (
-        <audio ref={audioRef} src={src} preload="metadata" hidden />
-      )}
+      {/* Always-mounted audio element */}
+      <audio ref={audioRef} src={src} preload="metadata" hidden />
 
       {/* Play / pause */}
       <button
@@ -159,7 +162,7 @@ export function AudioPlayer({ src, label = 'صوت', className }: AudioPlayerPro
           </span>
         </div>
         <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
-          {status === 'loading' ? (
+          {status === 'loading' || status === 'idle' ? (
             <div className="absolute inset-0 animate-pulse bg-muted" />
           ) : (
             <div
@@ -175,7 +178,7 @@ export function AudioPlayer({ src, label = 'صوت', className }: AudioPlayerPro
         type="button"
         onClick={reset}
         aria-label="إعادة"
-        disabled={status === 'loading'}
+        disabled={status === 'loading' || status === 'idle'}
         className={cn(
           'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-background/60 text-foreground transition-all hover:border-primary/50 hover:bg-primary/10 disabled:opacity-30',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'

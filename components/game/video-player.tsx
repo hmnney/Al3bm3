@@ -5,20 +5,19 @@ import { VideoOff, Play } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface VideoPlayerProps {
-  /** Root-relative URL, e.g. "/video/foo.mp4". */
+  /** Video URL — absolute (https://) or root-relative (/video/foo.mp4). */
   src: string;
   className?: string;
 }
 
 /**
- * Responsive local video player for question media.
+ * Responsive video player for question media.
  *
- * - 16:9 responsive container (aspect-video) so it scales on every screen.
- * - Lazy: the <video> only mounts after the user presses the poster play
- *   button, so we never fetch video bytes until needed.
- * - Native controls once playing; skeleton while the first frame buffers.
- * - On error (missing file, unsupported codec) it shows a quiet fallback and
- *   never throws — the rest of the modal stays fully usable.
+ * - 16:9 responsive container.
+ * - Auto-plays when the user presses the poster play button.
+ * - Uses onLoadedMetadata (fires with preload="metadata") instead of
+ *   onLoadedData, so the spinner clears as soon as metadata arrives.
+ * - Logs real errors to console instead of silently showing "unavailable".
  */
 export function VideoPlayer({ src, className }: VideoPlayerProps) {
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
@@ -33,7 +32,7 @@ export function VideoPlayer({ src, className }: VideoPlayerProps) {
     return (
       <div
         className={cn(
-          'flex aspect-video w-full items-center justify-center rounded-2xl border-2 border-border/60 bg-muted/30 text-muted-foreground',
+          'flex aspect-video w-full items-center justify-center rounded-2xl border-2 border-destructive/40 bg-destructive/5 text-destructive',
           className
         )}
       >
@@ -83,9 +82,13 @@ export function VideoPlayer({ src, className }: VideoPlayerProps) {
         controls
         autoPlay
         playsInline
-        preload="metadata"
-        onLoadedData={() => setStatus('ready')}
-        onError={() => setStatus('error')}
+        preload="auto"
+        onLoadedMetadata={() => setStatus('ready')}
+        onCanPlay={() => setStatus('ready')}
+        onError={(e) => {
+          console.error('[VideoPlayer] error loading:', src, e);
+          setStatus('error');
+        }}
         className="h-full w-full"
       />
     </div>

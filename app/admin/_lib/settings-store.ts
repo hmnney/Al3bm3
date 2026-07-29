@@ -1,18 +1,21 @@
-import type {
-  AllSettings,
-} from './settings-types';
+import type { AllSettings } from './settings-types';
 import { POINT_VALUES, TEAM_COLORS, DEFAULT_TEAM_NAMES } from '@/lib/constants';
+import {
+  ensureStateBucket,
+  getState,
+  putState,
+  readCache,
+  writeCache,
+} from '@/lib/state-persistence';
 
 /**
- * Local-only settings store for the Game Management Center. Mirrors the
- * pattern used by the admin content store (`store.ts`): seed defaults on
- * first run, persist every mutation to localStorage.
- *
- * The module exposes a clean load/save interface so the internals can later
- * be swapped for Supabase sync without touching the React context or UI.
+ * Settings store for the Game Management Center. localStorage is the fast
+ * cache; Supabase Storage is the durable source of truth so settings survive
+ * project restarts.
  */
 
-const SETTINGS_KEY = 'admin-settings-v1';
+const STORAGE_KEY = 'admin-settings-v1';
+const REMOTE_KEY = 'admin-settings';
 
 /** Build the default settings from the existing game constants. */
 export function defaultSettings(): AllSettings {
@@ -60,10 +63,7 @@ export function defaultSettings(): AllSettings {
   };
 }
 
-/**
- * Deep-merge persisted settings over defaults so new fields added in future
- * versions always have a value even if the saved blob predates them.
- */
+/** Deep-merge persisted settings over defaults so new fields always have a value. */
 function mergeSettings(saved: Partial<AllSettings>): AllSettings {
   const defaults = defaultSettings();
   return {
@@ -77,42 +77,45 @@ function mergeSettings(saved: Partial<AllSettings>): AllSettings {
   };
 }
 
-/** Read persisted settings, or seed + persist on first run. */
+/** Synchronous load from localStorage cache (instant hydration). */
 export function loadSettings(): AllSettings {
   if (typeof window === 'undefined') return defaultSettings();
-  try {
-    const raw = window.localStorage.getItem(SETTINGS_KEY);
-    if (!raw) {
-      const initial = defaultSettings();
-      window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(initial));
-      return initial;
-    }
-    return mergeSettings(JSON.parse(raw));
-  } catch {
-    const fresh = defaultSettings();
-    try {
-      window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(fresh));
-    } catch {
-      /* ignore quota errors */
-    }
-    return fresh;
-  }
+  const cached = readCache<AllSettings>(STORAGE_KEY);
+  if (cached) return mergeSettings(cached);
+  const initial = defaultSettings();
+  writeCache(STORAGE_KEY, initial);
+  return initial;
 }
 
-/** Persist settings. Silently ignores quota/access errors. */
-export function saveSettings(settings: AllSettings): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-  } catch {
-    /* ignore */
+/** Async load from Supabase Storage (durable source of truth). */
+export async function loadSettingsRemote(): Promise<AllSettings> {
+  await ensureStateBucket();
+  const remote = await getState<AllSettings>(REMOTE_KEY);
+  if (remote) {
+    const merged = mergeSettings(remote);
+    writeCache(STORAGE_KEY, merged);
+    return merged;
   }
+  const local = loadSettings();
+  await putState(REMOTE_KEY, local);
+  return local;
+}
+
+/** Persist to localStorage cache (synchronous). */
+export function saveSettings(settings: AllSettings): void {
+  writeCache(STORAGE_KEY, settings);
+}
+
+/** Persist to Supabase Storage (durable). Fire-and-forget. */
+export async function saveSettingsRemote(settings: AllSettings): Promise<void> {
+  await putState(REMOTE_KEY, settings);
 }
 
 /** Wipe persisted settings and restore defaults. */
 export function resetSettings(): AllSettings {
   const fresh = defaultSettings();
   saveSettings(fresh);
+  void saveSettingsRemote(fresh);
   return fresh;
 }
 

@@ -18,7 +18,9 @@ import type {
 import {
   genId,
   loadInteractiveCategories,
+  loadInteractiveCategoriesRemote,
   saveInteractiveCategories,
+  saveInteractiveCategoriesRemote,
 } from './store';
 import {
   createSession as createQRSession,
@@ -68,17 +70,23 @@ export function InteractiveProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<QRSession[]>([]);
   const [ready, setReady] = useState(false);
 
-  // Hydrate from localStorage on mount.
+  // Hydrate: localStorage first (instant), then Supabase (durable) on mount.
   useEffect(() => {
     setCategories(loadInteractiveCategories());
     initSessions();
     setSessions(getAllSessions());
     setReady(true);
+    void loadInteractiveCategoriesRemote().then((remote) => {
+      setCategories(remote);
+    });
   }, []);
 
-  // Persist categories on every change after hydration.
+  // Persist categories to localStorage + Supabase on every change after hydration.
   useEffect(() => {
-    if (ready) saveInteractiveCategories(categories);
+    if (ready) {
+      saveInteractiveCategories(categories);
+      void saveInteractiveCategoriesRemote(categories);
+    }
   }, [categories, ready]);
 
   // Tick QR sessions every second to update statuses.

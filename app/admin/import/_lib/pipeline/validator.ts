@@ -109,8 +109,8 @@ function isValidMediaUrl(url: string): boolean {
 /** Valid file extensions per media type. */
 const VALID_EXTENSIONS: Record<'image' | 'video' | 'audio', string[]> = {
   image: ['jpg', 'jpeg', 'png', 'webp'],
-  video: ['mp4', 'webm'],
-  audio: ['mp3', 'wav', 'ogg'],
+  video: ['mp4', 'webm', 'ogg', 'mov', 'm4v'],
+  audio: ['mp3', 'wav', 'ogg', 'm4a'],
 };
 
 /** Check if a media URL has a valid extension for its type. */
@@ -122,7 +122,16 @@ function isValidMediaExtension(url: string, type: 'image' | 'video' | 'audio'): 
       return VALID_EXTENSIONS[type].some((ext) => mime.includes(`/${ext}`));
     }
     const pathname = u.pathname.toLowerCase();
-    return VALID_EXTENSIONS[type].some((ext) => pathname.endsWith('.' + ext));
+    if (VALID_EXTENSIONS[type].some((ext) => pathname.endsWith('.' + ext))) {
+      return true;
+    }
+    // For video and audio, accept any http(s) URL even without a recognized
+    // extension — many CDN/streaming URLs have no file extension. The
+    // <video>/<audio> element will attempt playback regardless.
+    if (type === 'video' || type === 'audio') {
+      return u.protocol === 'http:' || u.protocol === 'https:';
+    }
+    return false;
   } catch {
     return false;
   }

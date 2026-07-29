@@ -13,8 +13,10 @@ import type { AdminCategory, AdminData, AdminQuestion } from './types';
 import {
   genId,
   loadAdminData,
+  loadAdminDataRemote,
   resetAdminData,
   saveAdminData,
+  saveAdminDataRemote,
 } from './store';
 
 /**
@@ -49,15 +51,21 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   });
   const [ready, setReady] = useState(false);
 
-  // Hydrate from localStorage once on mount (client-only).
+  // Hydrate: localStorage first (instant), then Supabase (durable) on mount.
   useEffect(() => {
     setData(loadAdminData());
     setReady(true);
+    void loadAdminDataRemote().then((remote) => {
+      setData(remote);
+    });
   }, []);
 
-  // Persist on every change after hydration.
+  // Persist to localStorage + Supabase on every change after hydration.
   useEffect(() => {
-    if (ready) saveAdminData(data);
+    if (ready) {
+      saveAdminData(data);
+      void saveAdminDataRemote(data);
+    }
   }, [data, ready]);
 
   const addCategory = useCallback((input: Omit<AdminCategory, 'id'>) => {

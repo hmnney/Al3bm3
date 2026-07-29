@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { AllSettings } from './settings-types';
-import { loadSettings, resetSettings, saveSettings } from './settings-store';
+import { loadSettings, resetSettings, saveSettings, loadSettingsRemote, saveSettingsRemote } from './settings-store';
 
 /**
  * Settings context for the Game Management Center. Mirrors the pattern used by
@@ -39,15 +39,21 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<AllSettings>(loadSettings());
   const [ready, setReady] = useState(false);
 
-  // Hydrate from localStorage once on mount (client-only).
+  // Hydrate: localStorage first (instant), then Supabase (durable) on mount.
   useEffect(() => {
     setSettings(loadSettings());
     setReady(true);
+    void loadSettingsRemote().then((remote) => {
+      setSettings(remote);
+    });
   }, []);
 
-  // Persist on every change after hydration.
+  // Persist to localStorage + Supabase on every change after hydration.
   useEffect(() => {
-    if (ready) saveSettings(settings);
+    if (ready) {
+      saveSettings(settings);
+      void saveSettingsRemote(settings);
+    }
   }, [settings, ready]);
 
   const update = useCallback((patch: Partial<AllSettings>) => {

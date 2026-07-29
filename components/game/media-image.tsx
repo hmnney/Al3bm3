@@ -5,7 +5,7 @@ import { ImageOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface MediaImageProps {
-  /** Root-relative URL, e.g. "/images/foo.jpg". */
+  /** Image URL — absolute (https://) or root-relative (/images/foo.jpg). */
   src: string;
   alt: string;
   className?: string;
@@ -16,15 +16,12 @@ interface MediaImageProps {
 }
 
 /**
- * Robust local-image renderer for question media.
+ * Robust image renderer for question media.
  *
- * - Lazy-loads via native loading="lazy" + decoding="async".
+ * - eager loading (the image is in a modal that just opened — lazy would
+ *   delay it unnecessarily).
  * - Shows a shimmer skeleton until the image decodes.
- * - On error (missing file, corrupt, etc.) it never crashes — it renders the
- *   provided fallback or a tasteful "no image" placeholder.
- *
- * This is the single image component used inside the question modal; swapping
- * it later upgrades image rendering everywhere.
+ * - On error logs the real reason to console, then renders the fallback.
  */
 export function MediaImage({
   src,
@@ -36,6 +33,7 @@ export function MediaImage({
   const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>(
     'loading'
   );
+  const [enlarged, setEnlarged] = useState(false);
 
   // Reset whenever the source changes (new question opened).
   useEffect(() => {
@@ -43,39 +41,58 @@ export function MediaImage({
   }, [src]);
 
   return (
-    <div className={cn('relative overflow-hidden', className)}>
-      {status !== 'error' && (
-        <img
-          src={src}
-          alt={alt}
-          loading="lazy"
-          decoding="async"
-          onLoad={() => setStatus('loaded')}
-          onError={() => setStatus('error')}
-          className={cn(
-            'h-full w-full object-cover transition-opacity duration-300',
-            status === 'loaded' ? 'opacity-100' : 'opacity-0'
-          )}
-        />
-      )}
+    <>
+      <div className={cn('relative overflow-hidden', className)}>
+        {status !== 'error' && (
+          <img
+            src={src}
+            alt={alt}
+            loading="eager"
+            decoding="async"
+            onLoad={() => setStatus('loaded')}
+            onError={(e) => {
+              console.error('[MediaImage] error loading:', src, e);
+              setStatus('error');
+            }}
+            onClick={() => status === 'loaded' && setEnlarged(true)}
+            className={cn(
+              'h-full w-full object-contain transition-opacity duration-300 cursor-zoom-in',
+              status === 'loaded' ? 'opacity-100' : 'opacity-0'
+            )}
+          />
+        )}
 
-      {status === 'loading' && skeleton && (
-        <div className="absolute inset-0 animate-pulse bg-muted/40" />
-      )}
+        {status === 'loading' && skeleton && (
+          <div className="absolute inset-0 animate-pulse bg-muted/40" />
+        )}
 
-      {status === 'error' && (
+        {status === 'error' && (
+          <div
+            className="flex h-full w-full items-center justify-center bg-muted/30 text-muted-foreground"
+            aria-label="الصورة غير متوفرة"
+          >
+            {fallback ?? (
+              <div className="flex flex-col items-center gap-2">
+                <ImageOff className="h-8 w-8" />
+                <span className="text-xs font-semibold">الصورة غير متوفرة</span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {enlarged && (
         <div
-          className="flex h-full w-full items-center justify-center bg-muted/30 text-muted-foreground"
-          aria-label="الصورة غير متوفرة"
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-background/90 backdrop-blur-xl p-4 sm:p-8"
+          onClick={() => setEnlarged(false)}
         >
-          {fallback ?? (
-            <div className="flex flex-col items-center gap-2">
-              <ImageOff className="h-8 w-8" />
-              <span className="text-xs font-semibold">الصورة غير متوفرة</span>
-            </div>
-          )}
+          <img
+            src={src}
+            alt={alt}
+            className="max-h-full max-w-full rounded-2xl object-contain shadow-2xl"
+          />
         </div>
       )}
-    </div>
+    </>
   );
 }
