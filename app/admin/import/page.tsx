@@ -81,7 +81,7 @@ const STEPS = [
 type Step = 0 | 1 | 2 | 3 | 4 | 5;
 
 export default function AdminImportPage() {
-  const { data, addQuestion, addCategory } = useAdmin();
+  const { data, addQuestion, addCategory, remoteSaveError } = useAdmin();
   const { toast } = useToast();
 
   const [step, setStep] = useState<Step>(0);
@@ -227,6 +227,7 @@ export default function AdminImportPage() {
   }, [unknownCategories]);
 
   const doImport = useCallback(async () => {
+    console.log('[import] doImport START — rows:', validated.length, 'resolutions:', Object.keys(resolutions).length);
     setImporting(true);
     setStep(4);
     const importable = validated.filter((v) => v.status !== 'error');
@@ -238,34 +239,61 @@ export default function AdminImportPage() {
       estimatedSecondsLeft: 0,
     });
 
-    const result = await runImport(
-      validated,
-      resolutions,
-      existingCategories,
-      {
-        createCategory: (name) => {
-          const cat = addCategory({
-            name,
-            description: name,
-            glyph: '🎯',
-            gradient: 'from-indigo-500/80 to-blue-700/80',
-          });
-          return cat.id;
+    let result: ImportReport | null = null;
+    try {
+      console.log('[import] before runImport — importable:', importable.length);
+      result = await runImport(
+        validated,
+        resolutions,
+        existingCategories,
+        {
+          createCategory: (name) => {
+            const cat = addCategory({
+              name,
+              description: name,
+              glyph: '🎯',
+              gradient: 'from-indigo-500/80 to-blue-700/80',
+            });
+            return cat.id;
+          },
+          createQuestion: (q) => addQuestion(q),
+          onProgress: (p) => setProgress(p),
         },
-        createQuestion: (q) => addQuestion(q),
-        onProgress: (p) => setProgress(p),
-      },
-      enrichments,
-      overrides
-    );
+        enrichments,
+        overrides
+      );
+      console.log('[import] after runImport — imported:', result.imported, 'skipped:', result.skipped);
+    } catch (err) {
+      console.error('[import] runImport THREW:', err);
+      result = {
+        imported: 0, skipped: importable.length, duplicates: 0, warnings: 0,
+        errors: importable.length, newCategories: 0, matchedCategories: 0,
+        createdCategoryNames: [], matchedCategoryNames: [],
+        importedImages: 0, importedVideos: 0, importedAudio: 0, skippedMedia: 0,
+      };
+    } finally {
+      console.log('[import] finally — setting report + step 5');
+      setReport(result ?? {
+        imported: 0, skipped: importable.length, duplicates: 0, warnings: 0,
+        errors: importable.length, newCategories: 0, matchedCategories: 0,
+        createdCategoryNames: [], matchedCategoryNames: [],
+        importedImages: 0, importedVideos: 0, importedAudio: 0, skippedMedia: 0,
+      });
+      setImporting(false);
+      setStep(5);
+    }
 
-    setReport(result);
-    setImporting(false);
-    setStep(5);
+    const finalReport = result ?? {
+      imported: 0, skipped: 0, duplicates: 0, warnings: 0,
+      errors: 0, newCategories: 0, matchedCategories: 0,
+      createdCategoryNames: [], matchedCategoryNames: [],
+      importedImages: 0, importedVideos: 0, importedAudio: 0, skippedMedia: 0,
+    } as ImportReport;
     toast({
       title: 'اكتمل الاستيراد',
-      description: `أُُستورد ${result.imported} سؤالاً، ${result.matchedCategories} تصنيف مطابق، ${result.newCategories} تصنيف جديد`,
+      description: `أُُستورد ${finalReport.imported} سؤالاً، ${finalReport.matchedCategories} تصنيف مطابق، ${finalReport.newCategories} تصنيف جديد`,
     });
+    console.log('[import] doImport END');
   }, [validated, resolutions, existingCategories, addQuestion, addCategory, toast, enrichments, overrides]);
 
   const reset = useCallback(() => {
@@ -625,6 +653,14 @@ export default function AdminImportPage() {
       {/* ---- STEP 5: Final Report ---- */}
       {step === 5 && report && (
         <div className="animate-fade-in space-y-6">
+          {remoteSaveError && (
+            <div className="flex items-center gap-3 rounded-2xl border-2 border-amber-500/40 bg-amber-500/10 p-4 text-sm">
+              <AlertTriangle className="h-5 w-5 shrink-0 text-amber-500" />
+              <span className="font-bold text-amber-600">
+                تم حفظ الأسئلة محلياً ولكن فشل المزامنة مع السحابة. البيانات محفوظة على هذا الجهاز.
+              </span>
+            </div>
+          )}
           <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-success/30 bg-success/5 p-8 text-center backdrop-blur">
             <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-success/15 text-success">
               <CheckCircle2 className="h-8 w-8" />

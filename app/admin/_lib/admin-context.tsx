@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -40,6 +41,8 @@ interface AdminContextValue {
   resetAll: () => void;
   /** Questions belonging to a category, derived. */
   questionsFor: (categoryId: string) => AdminQuestion[];
+  /** True when the last remote (Supabase) save failed. */
+  remoteSaveError: boolean;
 }
 
 const AdminContext = createContext<AdminContextValue | null>(null);
@@ -60,12 +63,23 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  // Persist to localStorage + Supabase on every change after hydration.
+  // Persist to localStorage synchronously (fast) and Supabase remotely
+  // (debounced so a burst of setData calls — e.g. during Smart Import —
+  // doesn't flood the network with one upload per question).
+  const remoteSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [remoteSaveError, setRemoteSaveError] = useState(false);
+
   useEffect(() => {
-    if (ready) {
-      saveAdminData(data);
-      void saveAdminDataRemote(data);
-    }
+    if (!ready) return;
+    saveAdminData(data);
+
+    if (remoteSaveTimer.current) clearTimeout(remoteSaveTimer.current);
+    remoteSaveTimer.current = setTimeout(async () => {
+      console.log('[admin-context] saveAdminDataRemote START');
+      const ok = await saveAdminDataRemote(data);
+      console.log('[admin-context] saveAdminDataRemote END — ok:', ok);
+      if (!ok) setRemoteSaveError(true);
+    }, 1500);
   }, [data, ready]);
 
   const addCategory = useCallback((input: Omit<AdminCategory, 'id'>) => {
@@ -139,6 +153,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       deleteQuestion,
       resetAll,
       questionsFor,
+      remoteSaveError,
     }),
     [
       data,
@@ -151,6 +166,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       deleteQuestion,
       resetAll,
       questionsFor,
+      remoteSaveError,
     ]
   );
 

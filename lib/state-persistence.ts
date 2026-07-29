@@ -30,6 +30,7 @@ export async function ensureStateBucket(): Promise<void> {
 /** Write a JSON blob to Supabase Storage. Returns true on success. */
 export async function putState<T>(key: string, value: T): Promise<boolean> {
   try {
+    console.log('[state-persistence] putState START — key:', key);
     const body = JSON.stringify(value);
     const { error } = await supabase.storage
       .from(BUCKET)
@@ -38,8 +39,10 @@ export async function putState<T>(key: string, value: T): Promise<boolean> {
         upsert: true,
         contentType: 'application/json',
       });
+    console.log('[state-persistence] putState END — key:', key, 'error:', error?.message ?? 'none');
     return !error;
-  } catch {
+  } catch (e) {
+    console.error('[state-persistence] putState FAILED — key:', key, e);
     return false;
   }
 }

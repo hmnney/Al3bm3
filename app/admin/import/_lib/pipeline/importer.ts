@@ -212,7 +212,11 @@ export async function runImport(
       estimatedSecondsLeft: Math.ceil(estimatedSecondsLeft),
     });
 
-    if (i % 5 === 0) await new Promise((r) => setTimeout(r, 0));
+    if (i % 5 === 0) {
+      console.log(`[importer] yielding at row ${i + 1}/${total}, imported so far: ${imported}`);
+      await new Promise((r) => setTimeout(r, 0));
+      console.log(`[importer] resumed after row ${i + 1}`);
+    }
   }
 
   errors += validated.filter((v) => v.status === 'error').length;

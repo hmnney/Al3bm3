@@ -55,8 +55,8 @@ export function saveAdminData(data: AdminData): void {
 }
 
 /** Persist to Supabase Storage (durable). Fire-and-forget; callers don't await. */
-export async function saveAdminDataRemote(data: AdminData): Promise<void> {
-  await putState(REMOTE_KEY, data);
+export async function saveAdminDataRemote(data: AdminData): Promise<boolean> {
+  return putState(REMOTE_KEY, data);
 }
 
 /** Wipe both stores and reseed the category catalog (questions stay empty). */
