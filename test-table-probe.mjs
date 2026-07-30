@@ -1,79 +1,40 @@
-const URL = 'https://ywyyuhjkzznuycafftgr.supabase.co';
-const KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl3eXl1aGprenpudWljYWZmdGdyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU0MTEwODcsImV4cCI6MjEwMDk4NzA4N30.e2IHZPc3HiUOOZcBI79nRtOsKPSxNPy16dFUs02Kvzg';
+import { createClient } from '@supabase/supabase-js';
 
-const headers = {
-  'apikey': KEY,
-  'Authorization': `Bearer ${KEY}`,
-  'Content-Type': 'application/json',
-};
+const URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const supabase = createClient(URL, KEY);
 
-// Test 1: Try selecting from app_state table
-console.log('=== Test 1: SELECT from app_state ===');
-try {
-  const res = await fetch(`${URL}/rest/v1/app_state?select=*`, { headers });
-  const body = await res.text();
-  console.log('Status:', res.status);
-  console.log('Body:', body.substring(0, 500));
-} catch (e) {
-  console.log('Error:', e.message);
+const TABLE = 'app_state';
+
+// Try selecting with * to see what columns exist
+console.log('=== Probe 1: SELECT * ===');
+{
+  const { data, error } = await supabase.from(TABLE).select('*').limit(1);
+  if (error) console.log('Error:', error.message, JSON.stringify(error));
+  else console.log('Data:', JSON.stringify(data, null, 2));
 }
 
-// Test 2: Try inserting a row
-console.log('\n=== Test 2: INSERT into app_state ===');
-try {
-  const res = await fetch(`${URL}/rest/v1/app_state`, {
-    method: 'POST',
-    headers: { ...headers, 'Prefer': 'return=representation' },
-    body: JSON.stringify({ key: 'test-question', value: { test: true, question: 'What is 2+2?', answer: '4' } }),
-  });
-  const body = await res.text();
-  console.log('Status:', res.status);
-  console.log('Body:', body.substring(0, 500));
-} catch (e) {
-  console.log('Error:', e.message);
-}
+// Try common column name combos
+const combos = [
+  ['id', 'data'],
+  ['id', 'value'],
+  ['id', 'payload'],
+  ['id', 'content'],
+  ['name', 'data'],
+  ['name', 'value'],
+  ['name', 'payload'],
+  ['name', 'content'],
+  ['key', 'data'],
+  ['key', 'payload'],
+  ['key', 'content'],
+  ['slug', 'data'],
+  ['slug', 'value'],
+  ['slug', 'payload'],
+];
 
-// Test 3: Try with data column instead of value
-console.log('\n=== Test 3: INSERT with data column ===');
-try {
-  const res = await fetch(`${URL}/rest/v1/app_state`, {
-    method: 'POST',
-    headers: { ...headers, 'Prefer': 'return=representation' },
-    body: JSON.stringify({ key: 'test-question-2', data: { test: true, question: 'What is 3+3?', answer: '6' } }),
-  });
-  const body = await res.text();
-  console.log('Status:', res.status);
-  console.log('Body:', body.substring(0, 500));
-} catch (e) {
-  console.log('Error:', e.message);
-}
-
-// Test 4: Try with content column
-console.log('\n=== Test 4: INSERT with content column ===');
-try {
-  const res = await fetch(`${URL}/rest/v1/app_state`, {
-    method: 'POST',
-    headers: { ...headers, 'Prefer': 'return=representation' },
-    body: JSON.stringify({ key: 'test-question-3', content: JSON.stringify({ test: true, question: 'What is 4+4?', answer: '8' }) }),
-  });
-  const body = await res.text();
-  console.log('Status:', res.status);
-  console.log('Body:', body.substring(0, 500));
-} catch (e) {
-  console.log('Error:', e.message);
-}
-
-// Test 5: Try with payload column
-console.log('\n=== Test 5: INSERT with payload column ===');
-try {
-  const res = await fetch(`${URL}/rest/v1/app_state`, {
-    method: 'POST',
-    headers: { ...headers, 'Prefer': 'return=representation' },
-    body: JSON.stringify({ key: 'test-question-4', payload: { test: true, question: 'What is 5+5?', answer: '10' } }),
-  });
-  const body = await res.text();
-  console.log('Status:', res.status);
-  console.log('Body:', body.substring(0, 500));
-} catch (e) {
-  console.log('Error:', e.message);
+for (const [k, v] of combos) {
+  const { data, error } = await supabase.from(TABLE).select(`${k},${v}`).limit(1);
+  if (!error) {
+    console.log(`FOUND COLUMNS: ${k}, ${v} =>`, JSON.stringify(data));
+  }
 }

@@ -1,15 +1,15 @@
-import { supabase, STATE_BUCKET, hasSupabaseConfig } from './supabase-client';
+import { supabase, hasSupabaseConfig } from './supabase-client';
 
 /**
- * Durable persistence backed by Supabase Storage.
+ * Durable persistence backed by the Supabase Database `app_state` table.
  *
- * The admin panel stores three JSON blobs (admin data, settings, interactive
- * categories). localStorage is used as a fast cache so the UI renders
- * instantly; Supabase Storage is the source of truth so data survives
- * project restarts (which wipe localStorage in the preview environment).
+ * Each key is stored as a row keyed by `id` (text) with the JSON-serializable
+ * value in the `data` column (jsonb). localStorage is used as a fast
+ * synchronous cache so the UI renders instantly; the database is the source
+ * of truth so data survives project restarts and is shared across browsers.
  */
 
-const BUCKET = STATE_BUCKET;
+const TABLE = 'app_state';
 
 export interface StorageResult {
   ok: boolean;
@@ -19,182 +19,62 @@ export interface StorageResult {
   status?: number;
 }
 
-/**
- * Raw fetch probe — bypasses the Supabase JS client to capture the EXACT
- * HTTP status code, response headers, and response body returned by the
- * Supabase Storage API. The Supabase JS client wraps network errors into
- * a generic "Load failed" message, hiding the real status code.
- */
-async function rawStorageProbe(
-  supabaseUrl: string,
-  supabaseKey: string,
-  bucket: string,
-  path: string,
-  body: string,
-): Promise<void> {
-  const uploadUrl = `${supabaseUrl}/storage/v1/object/${bucket}/${path}`;
-  console.log('[state-persistence] RAW PROBE — URL:', uploadUrl);
-
-  try {
-    const res = await fetch(uploadUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${supabaseKey}`,
-        'apikey': supabaseKey,
-        'Content-Type': 'application/json',
-        'x-upsert': 'true',
-      },
-      body,
-    });
-
-    const responseText = await res.text();
-    const responseHeaders: Record<string, string> = {};
-    res.headers.forEach((v, k) => { responseHeaders[k] = v; });
-
-    console.log('[state-persistence] RAW PROBE RESULT:', {
-      status: res.status,
-      statusText: res.statusText,
-      headers: responseHeaders,
-      body: responseText.slice(0, 2000),
-    });
-  } catch (e) {
-    console.log('[state-persistence] RAW PROBE FETCH THREW:', e instanceof Error ? e.message : String(e));
-  }
-}
-
-/** Write a JSON blob to Supabase Storage. Returns detailed result. */
+/** Write a JSON-serializable value to the `app_state` table (upsert by key). */
 export async function putState<T>(key: string, value: T): Promise<StorageResult> {
-  const path = `${key}.json`;
   try {
-    console.log('[state-persistence] putState START — bucket:', BUCKET, 'path:', path);
-
-    const body = JSON.stringify(value);
-    console.log('[state-persistence] upload START — size:', body.length, 'bytes');
-
     if (!hasSupabaseConfig) {
       return { ok: false, error: 'Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in .env' };
     }
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
-    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
-    await rawStorageProbe(supabaseUrl, supabaseKey, BUCKET, path, body);
-
-    const { error, data } = await supabase.storage
-      .from(BUCKET)
-      .upload(path, body, {
-        cacheControl: '0',
-        upsert: true,
-        contentType: 'application/json',
-      });
+    const { error } = await supabase
+      .from(TABLE)
+      .upsert({ id: key, data: value }, { onConflict: 'id' });
 
     if (error) {
-      console.error('[state-persistence] upload FAILED:', {
-        path,
-        message: error.message,
-        name: error.name,
-        statusCode: (error as { statusCode?: string }).statusCode,
-      });
       return {
         ok: false,
-        status: (error as { statusCode?: string }).statusCode ? Number((error as { statusCode?: string }).statusCode) : undefined,
-        error: `Upload failed for "${path}" in bucket "${BUCKET}": ${error.message}`,
+        status: (error as { statusCode?: number }).statusCode,
+        error: `Database upsert failed for key "${key}" on table "${TABLE}": ${error.message}`,
       };
     }
 
-    console.log('[state-persistence] upload SUCCESS — path:', path, 'data:', data);
     return { ok: true };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    const stack = e instanceof Error ? e.stack : '';
-    console.error('[state-persistence] putState EXCEPTION:', {
-      path,
-      message: msg,
-      stack,
-    });
     return {
       ok: false,
-      error: `Exception uploading "${path}" to bucket "${BUCKET}": ${msg}`,
+      error: `Exception upserting key "${key}" to table "${TABLE}": ${msg}`,
     };
   }
 }
 
-/**
- * Raw fetch probe for downloads — captures the EXACT HTTP status code
- * and response body from the Supabase Storage download endpoint.
- */
-async function rawDownloadProbe(
-  supabaseUrl: string,
-  supabaseKey: string,
-  bucket: string,
-  path: string,
-): Promise<void> {
-  const downloadUrl = `${supabaseUrl}/storage/v1/object/${bucket}/${path}`;
-  console.log('[state-persistence] RAW DOWNLOAD PROBE — URL:', downloadUrl);
-
-  try {
-    const res = await fetch(downloadUrl, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${supabaseKey}`,
-        'apikey': supabaseKey,
-      },
-    });
-
-    const responseText = await res.text();
-    const responseHeaders: Record<string, string> = {};
-    res.headers.forEach((v, k) => { responseHeaders[k] = v; });
-
-    console.log('[state-persistence] RAW DOWNLOAD PROBE RESULT:', {
-      status: res.status,
-      statusText: res.statusText,
-      headers: responseHeaders,
-      body: responseText.slice(0, 2000),
-    });
-  } catch (e) {
-    console.log('[state-persistence] RAW DOWNLOAD PROBE FETCH THREW:', e instanceof Error ? e.message : String(e));
-  }
-}
-
-/** Read a JSON blob from Supabase Storage. Returns null if missing/error. */
+/** Read a JSON-serializable value from the `app_state` table by key. Returns null if missing/error. */
 export async function getState<T>(key: string): Promise<T | null> {
-  const path = `${key}.json`;
   try {
-    console.log('[state-persistence] getState START — bucket:', BUCKET, 'path:', path);
-
     if (!hasSupabaseConfig) {
       return null;
     }
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
-    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
-    await rawDownloadProbe(supabaseUrl, supabaseKey, BUCKET, path);
-
-    const { data, error } = await supabase.storage
-      .from(BUCKET)
-      .download(path);
+    const { data, error } = await supabase
+      .from(TABLE)
+      .select('data')
+      .eq('id', key)
+      .maybeSingle();
 
     if (error) {
-      console.error('[state-persistence] download error:', {
-        path,
+      console.error('[state-persistence] getState error:', {
+        key,
         message: error.message,
-        name: error.name,
-        statusCode: (error as { statusCode?: string }).statusCode,
       });
       return null;
     }
     if (!data) {
-      console.log('[state-persistence] download — no data for path:', path);
       return null;
     }
 
-    const text = await data.text();
-    console.log('[state-persistence] download SUCCESS — path:', path, 'size:', text.length);
-    return JSON.parse(text) as T;
+    return (data as { data: T }).data;
   } catch (e) {
-    console.error('[state-persistence] getState EXCEPTION:', {
-      path,
-      error: e,
-    });
+    console.error('[state-persistence] getState exception:', { key, error: e });
     return null;
   }
 }
