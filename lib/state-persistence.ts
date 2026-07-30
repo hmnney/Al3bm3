@@ -1,4 +1,4 @@
-import { supabase } from './supabase-client';
+import { supabase, STATE_BUCKET, hasSupabaseConfig } from './supabase-client';
 
 /**
  * Durable persistence backed by Supabase Storage.
@@ -7,13 +7,9 @@ import { supabase } from './supabase-client';
  * categories). localStorage is used as a fast cache so the UI renders
  * instantly; Supabase Storage is the source of truth so data survives
  * project restarts (which wipe localStorage in the preview environment).
- *
- * The `app-state` bucket MUST already exist in the Supabase project. We never
- * create buckets from the client — doing so fails with a permission error.
- * If the bucket is missing, uploads return a clear error message.
  */
 
-const BUCKET = 'app-state';
+const BUCKET = STATE_BUCKET;
 
 export interface StorageResult {
   ok: boolean;
@@ -75,8 +71,12 @@ export async function putState<T>(key: string, value: T): Promise<StorageResult>
     const body = JSON.stringify(value);
     console.log('[state-persistence] upload START — size:', body.length, 'bytes');
 
+    if (!hasSupabaseConfig) {
+      return { ok: false, error: 'Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY in .env' };
+    }
+
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
-    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? '';
     await rawStorageProbe(supabaseUrl, supabaseKey, BUCKET, path, body);
 
     const { error, data } = await supabase.storage
@@ -161,8 +161,12 @@ export async function getState<T>(key: string): Promise<T | null> {
   try {
     console.log('[state-persistence] getState START — bucket:', BUCKET, 'path:', path);
 
+    if (!hasSupabaseConfig) {
+      return null;
+    }
+
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
-    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? '';
     await rawDownloadProbe(supabaseUrl, supabaseKey, BUCKET, path);
 
     const { data, error } = await supabase.storage
