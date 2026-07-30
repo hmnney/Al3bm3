@@ -105,9 +105,10 @@ function mockFallback(
 function parsePoints(raw: string): 250 | 500 | 750 | undefined {
   const p = Number(raw.trim());
   if (Number.isNaN(p)) return undefined;
-  if (p <= 250) return 250;
-  if (p <= 500) return 500;
-  return 750;
+  if (p === 250) return 250;
+  if (p === 500) return 500;
+  if (p === 750) return 750;
+  return undefined;
 }
 
 function difficultyToPoints(d: 'easy' | 'medium' | 'hard'): 250 | 500 | 750 {

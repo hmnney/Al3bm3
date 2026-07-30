@@ -1,11 +1,11 @@
 import type { AllSettings } from './settings-types';
 import { POINT_VALUES, TEAM_COLORS, DEFAULT_TEAM_NAMES } from '@/lib/constants';
 import {
-  ensureStateBucket,
   getState,
   putState,
   readCache,
   writeCache,
+  type StorageResult,
 } from '@/lib/state-persistence';
 
 /**
@@ -89,16 +89,17 @@ export function loadSettings(): AllSettings {
 
 /** Async load from Supabase Storage (durable source of truth). */
 export async function loadSettingsRemote(): Promise<AllSettings> {
-  await ensureStateBucket();
   const remote = await getState<AllSettings>(REMOTE_KEY);
   if (remote) {
     const merged = mergeSettings(remote);
     writeCache(STORAGE_KEY, merged);
     return merged;
   }
-  const local = loadSettings();
-  await putState(REMOTE_KEY, local);
-  return local;
+  // No remote data (or network error) — return local WITHOUT uploading.
+  // Uploading here could overwrite another device's settings on a transient
+  // network failure. The remote will be populated when the user makes
+  // actual changes (settings context's debounced save handles that).
+  return loadSettings();
 }
 
 /** Persist to localStorage cache (synchronous). */
@@ -106,9 +107,9 @@ export function saveSettings(settings: AllSettings): void {
   writeCache(STORAGE_KEY, settings);
 }
 
-/** Persist to Supabase Storage (durable). Fire-and-forget. */
-export async function saveSettingsRemote(settings: AllSettings): Promise<void> {
-  await putState(REMOTE_KEY, settings);
+/** Persist to Supabase Storage (durable). Returns detailed result. */
+export async function saveSettingsRemote(settings: AllSettings): Promise<StorageResult> {
+  return putState(REMOTE_KEY, settings);
 }
 
 /** Wipe persisted settings and restore defaults. */

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Bot,
   Save,
@@ -52,6 +52,14 @@ export default function AISettingsPage() {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResultData | null>(null);
   const [showDebug, setShowDebug] = useState(false);
+
+  // Sync local form state when settings.ai changes (e.g. after remote hydration).
+  useEffect(() => {
+    setApiKey(ai.apiKey);
+    setModel(ai.model);
+    setTemperature(ai.temperature);
+    setMaxTokens(ai.maxTokens);
+  }, [ai.apiKey, ai.model, ai.temperature, ai.maxTokens]);
 
   const providers = listProviders();
   const currentProvider = getProviderById(ai.provider);

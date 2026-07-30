@@ -23,7 +23,7 @@ import { useGame } from '@/components/providers/game-provider';
 import { useCountdownTimer } from '@/hooks/use-countdown-timer';
 import { CATEGORY_MAP, TEAM_COLOR_MAP, POINT_VALUES } from '@/lib/constants';
 import { drawQuestionForSlot } from '@/data';
-import { loadAdminData } from '@/app/admin/_lib/store';
+import { loadAdminData, loadAdminDataRemote } from '@/app/admin/_lib/store';
 import type { AdminQuestion, AdminCategory } from '@/app/admin/_lib/types';
 import { registerAllPlugins } from '@/app/admin/interactive/_lib/plugins';
 import { getPlugin } from '@/app/admin/interactive/_lib/registry';
@@ -104,13 +104,16 @@ export default function BoardPage() {
   );
 
   // Load persisted admin questions once on mount. This is the ONLY question
-  // source — there is no static demo fallback.
+  // source — there is no static demo fallback. We hydrate from localStorage
+  // first (instant) then fetch from Supabase Storage (durable source of truth)
+  // so that a fresh device with empty localStorage still receives the full
+  // question bank imported on another device.
   const [adminQuestions, setAdminQuestions] = useState<AdminQuestion[]>([]);
   const [adminCategoriesById, setAdminCategoriesById] = useState<
     Record<string, AdminCategory>
   >({});
-  useEffect(() => {
-    const data = loadAdminData();
+
+  const applyAdminData = useCallback((data: { questions: AdminQuestion[]; categories: AdminCategory[] }) => {
     setAdminQuestions(data.questions);
     const map: Record<string, AdminCategory> = {};
     data.categories.forEach((c) => {
@@ -118,6 +121,11 @@ export default function BoardPage() {
     });
     setAdminCategoriesById(map);
   }, []);
+
+  useEffect(() => {
+    applyAdminData(loadAdminData());
+    void loadAdminDataRemote().then(applyAdminData);
+  }, [applyAdminData]);
 
   const [activeQuestion, setActiveQuestion] = useState<ActiveQuestion | null>(
     null

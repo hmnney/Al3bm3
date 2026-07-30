@@ -24,6 +24,7 @@ import {
   Image as ImageIcon,
   Video as VideoIcon,
   AudioLines,
+  RefreshCw,
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAdmin } from '../_lib/admin-context';
@@ -81,7 +82,7 @@ const STEPS = [
 type Step = 0 | 1 | 2 | 3 | 4 | 5;
 
 export default function AdminImportPage() {
-  const { data, addQuestion, addCategory, remoteSaveError } = useAdmin();
+  const { data, addQuestion, addCategory, remoteSaveError, remoteSaveErrorMessage, retryRemoteSync } = useAdmin();
   const { toast } = useToast();
 
   const [step, setStep] = useState<Step>(0);
@@ -95,6 +96,32 @@ export default function AdminImportPage() {
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [report, setReport] = useState<ImportReport | null>(null);
   const [importing, setImporting] = useState(false);
+
+  const [retrying, setRetrying] = useState(false);
+
+  const handleRetrySync = useCallback(async () => {
+    setRetrying(true);
+    try {
+      const result = await retryRemoteSync();
+      if (result.ok) {
+        toast({ title: 'تمت المزامنة بنجاح', description: 'تم حفظ البيانات في السحابة' });
+      } else {
+        toast({
+          title: 'فشلت المزامنة',
+          description: result.error ?? 'خطأ غير معروف',
+          variant: 'destructive',
+        });
+      }
+    } catch (e) {
+      toast({
+        title: 'فشلت المزامنة',
+        description: (e as Error).message,
+        variant: 'destructive',
+      });
+    } finally {
+      setRetrying(false);
+    }
+  }, [retryRemoteSync, toast]);
 
   const existingCategories: MatchableCategory[] = useMemo(
     () => data.categories.map((c) => ({ id: c.id, name: c.name })),
@@ -213,19 +240,6 @@ export default function AdminImportPage() {
     }
   }, [rows, existingCategoryNames, toast]);
 
-  const goToResolution = useCallback(() => {
-    if (unknownCategories.length > 0) {
-      const seed: Record<string, CategoryResolution> = {};
-      unknownCategories.forEach((name) => {
-        seed[name] = { name, action: 'create' };
-      });
-      setResolutions(seed);
-      setStep(3);
-    } else {
-      setStep(4);
-    }
-  }, [unknownCategories]);
-
   const doImport = useCallback(async () => {
     console.log('[import] doImport START — rows:', validated.length, 'resolutions:', Object.keys(resolutions).length);
     setImporting(true);
@@ -267,7 +281,8 @@ export default function AdminImportPage() {
       console.error('[import] runImport THREW:', err);
       result = {
         imported: 0, skipped: importable.length, duplicates: 0, warnings: 0,
-        errors: importable.length, newCategories: 0, matchedCategories: 0,
+        errors: importable.length, failedRows: [], failedRowErrors: {},
+        newCategories: 0, matchedCategories: 0,
         createdCategoryNames: [], matchedCategoryNames: [],
         importedImages: 0, importedVideos: 0, importedAudio: 0, skippedMedia: 0,
       };
@@ -275,7 +290,8 @@ export default function AdminImportPage() {
       console.log('[import] finally — setting report + step 5');
       setReport(result ?? {
         imported: 0, skipped: importable.length, duplicates: 0, warnings: 0,
-        errors: importable.length, newCategories: 0, matchedCategories: 0,
+        errors: importable.length, failedRows: [], failedRowErrors: {},
+        newCategories: 0, matchedCategories: 0,
         createdCategoryNames: [], matchedCategoryNames: [],
         importedImages: 0, importedVideos: 0, importedAudio: 0, skippedMedia: 0,
       });
@@ -285,7 +301,8 @@ export default function AdminImportPage() {
 
     const finalReport = result ?? {
       imported: 0, skipped: 0, duplicates: 0, warnings: 0,
-      errors: 0, newCategories: 0, matchedCategories: 0,
+      errors: 0, failedRows: [], failedRowErrors: {},
+      newCategories: 0, matchedCategories: 0,
       createdCategoryNames: [], matchedCategoryNames: [],
       importedImages: 0, importedVideos: 0, importedAudio: 0, skippedMedia: 0,
     } as ImportReport;
@@ -295,6 +312,20 @@ export default function AdminImportPage() {
     });
     console.log('[import] doImport END');
   }, [validated, resolutions, existingCategories, addQuestion, addCategory, toast, enrichments, overrides]);
+
+  const goToResolution = useCallback(() => {
+    if (unknownCategories.length > 0) {
+      const seed: Record<string, CategoryResolution> = {};
+      unknownCategories.forEach((name) => {
+        seed[name] = { name, action: 'create' };
+      });
+      setResolutions(seed);
+      setStep(3);
+    } else {
+      // No unknown categories — start import immediately.
+      void doImport();
+    }
+  }, [unknownCategories, doImport]);
 
   const reset = useCallback(() => {
     setStep(0);
@@ -634,6 +665,7 @@ export default function AdminImportPage() {
             <div className="w-full max-w-md">
               <div className="mb-2 flex items-center justify-between text-xs font-bold text-muted-foreground">
                 <span>{progress.imported.toLocaleString('ar-EG')} مستورد</span>
+                <span>الاستيراد {progress.imported.toLocaleString('ar-EG')} / {progress.total.toLocaleString('ar-EG')}</span>
                 <span>{progress.remaining.toLocaleString('ar-EG')} متبقّي</span>
               </div>
               <div className="relative h-4 overflow-hidden rounded-full bg-muted/30">
@@ -654,11 +686,30 @@ export default function AdminImportPage() {
       {step === 5 && report && (
         <div className="animate-fade-in space-y-6">
           {remoteSaveError && (
-            <div className="flex items-center gap-3 rounded-2xl border-2 border-amber-500/40 bg-amber-500/10 p-4 text-sm">
-              <AlertTriangle className="h-5 w-5 shrink-0 text-amber-500" />
-              <span className="font-bold text-amber-600">
-                تم حفظ الأسئلة محلياً ولكن فشل المزامنة مع السحابة. البيانات محفوظة على هذا الجهاز.
-              </span>
+            <div className="space-y-3 rounded-2xl border-2 border-amber-500/40 bg-amber-500/10 p-4 text-sm">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="h-5 w-5 shrink-0 text-amber-500" />
+                <div className="flex flex-col gap-1">
+                  <span className="font-bold text-amber-600">
+                    تم حفظ الأسئلة محلياً ولكن فشل المزامنة مع السحابة.
+                  </span>
+                  <span className="text-xs text-amber-700/80">
+                    السبب: {remoteSaveErrorMessage ?? 'خطأ غير معروف'}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    البيانات محفوظة على هذا الجهاز. يمكنك إعادة المحاولة بدون إعادة الاستيراد.
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleRetrySync}
+                disabled={retrying}
+                className="inline-flex items-center gap-2 rounded-full bg-amber-500 px-5 py-2 text-xs font-bold text-white shadow transition-all hover:brightness-110 active:scale-[0.98] disabled:opacity-50"
+              >
+                {retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                {retrying ? 'يجري المزامنة…' : 'إعادة المزامنة'}
+              </button>
             </div>
           )}
           <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-success/30 bg-success/5 p-8 text-center backdrop-blur">
@@ -692,6 +743,21 @@ export default function AdminImportPage() {
               />
             ))}
           </div>
+
+          {/* Failed rows breakdown */}
+          {report.failedRows.length > 0 && (
+            <div className="rounded-2xl border-2 border-destructive/30 bg-destructive/5 p-4">
+              <h3 className="mb-3 text-sm font-black text-destructive">الصفوف الفاشلة ({report.failedRows.length})</h3>
+              <div className="max-h-48 overflow-auto scrollbar-thin space-y-1.5">
+                {report.failedRows.map((rn) => (
+                  <div key={rn} className="flex items-start gap-2 rounded-lg bg-destructive/10 px-3 py-1.5 text-xs">
+                    <span className="font-bold text-destructive">صف {rn}</span>
+                    <span className="text-muted-foreground">{report.failedRowErrors[rn] ?? 'خطأ غير معروف'}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Category breakdown */}
           {(report.createdCategoryNames.length > 0 || report.matchedCategoryNames.length > 0) && (

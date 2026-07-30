@@ -10,6 +10,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import type { StorageResult } from '@/lib/state-persistence';
 import type { AdminCategory, AdminData, AdminQuestion } from './types';
 import {
   genId,
@@ -43,6 +44,10 @@ interface AdminContextValue {
   questionsFor: (categoryId: string) => AdminQuestion[];
   /** True when the last remote (Supabase) save failed. */
   remoteSaveError: boolean;
+  /** Human-readable error message from the last remote save attempt. */
+  remoteSaveErrorMessage: string | null;
+  /** Manually retry the cloud sync with current data. */
+  retryRemoteSync: () => Promise<StorageResult>;
 }
 
 const AdminContext = createContext<AdminContextValue | null>(null);
@@ -54,12 +59,24 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   });
   const [ready, setReady] = useState(false);
 
+  // Race-condition guards: prevent the initial remote load from overwriting
+  // local mutations, and prevent saving defaults to remote before the
+  // initial remote load completes.
+  const acceptRemote = useRef(true);
+  const remoteLoaded = useRef(false);
+
   // Hydrate: localStorage first (instant), then Supabase (durable) on mount.
   useEffect(() => {
+    console.log('[admin-context] hydrate START — loading from localStorage');
     setData(loadAdminData());
     setReady(true);
     void loadAdminDataRemote().then((remote) => {
-      setData(remote);
+      console.log('[admin-context] loadAdminDataRemote resolved — acceptRemote:', acceptRemote.current);
+      if (acceptRemote.current) {
+        setData(remote);
+      }
+      remoteLoaded.current = true;
+      console.log('[admin-context] remoteLoaded = true');
     });
   }, []);
 
@@ -68,21 +85,43 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   // doesn't flood the network with one upload per question).
   const remoteSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [remoteSaveError, setRemoteSaveError] = useState(false);
+  const [remoteSaveErrorMessage, setRemoteSaveErrorMessage] = useState<string | null>(null);
+
+  const doRemoteSave = useCallback(async (currentData: AdminData): Promise<StorageResult> => {
+    console.log('[admin-context] saveAdminDataRemote START');
+    const result = await saveAdminDataRemote(currentData);
+    console.log('[admin-context] saveAdminDataRemote END — result:', result);
+    if (result.ok) {
+      setRemoteSaveError(false);
+      setRemoteSaveErrorMessage(null);
+    } else {
+      setRemoteSaveError(true);
+      setRemoteSaveErrorMessage(result.error ?? 'Unknown error');
+      console.error('[admin-context] REMOTE SAVE FAILED:', result.error);
+    }
+    return result;
+  }, []);
+
+  const retryRemoteSync = useCallback(async (): Promise<StorageResult> => {
+    return doRemoteSave(data);
+  }, [data, doRemoteSave]);
 
   useEffect(() => {
     if (!ready) return;
     saveAdminData(data);
 
+    // Don't save to remote until the initial remote load completes —
+    // otherwise we overwrite durable data with seed/defaults.
+    if (!remoteLoaded.current) return;
+
     if (remoteSaveTimer.current) clearTimeout(remoteSaveTimer.current);
-    remoteSaveTimer.current = setTimeout(async () => {
-      console.log('[admin-context] saveAdminDataRemote START');
-      const ok = await saveAdminDataRemote(data);
-      console.log('[admin-context] saveAdminDataRemote END — ok:', ok);
-      if (!ok) setRemoteSaveError(true);
+    remoteSaveTimer.current = setTimeout(() => {
+      void doRemoteSave(data);
     }, 1500);
-  }, [data, ready]);
+  }, [data, ready, doRemoteSave]);
 
   const addCategory = useCallback((input: Omit<AdminCategory, 'id'>) => {
+    acceptRemote.current = false;
     const cat: AdminCategory = { ...input, id: genId('cat') };
     setData((d) => ({ ...d, categories: [...d.categories, cat] }));
     return cat;
@@ -90,6 +129,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
 
   const updateCategory = useCallback(
     (id: string, patch: Partial<AdminCategory>) => {
+      acceptRemote.current = false;
       setData((d) => ({
         ...d,
         categories: d.categories.map((c) =>
@@ -101,6 +141,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   );
 
   const deleteCategory = useCallback((id: string) => {
+    acceptRemote.current = false;
     setData((d) => ({
       categories: d.categories.filter((c) => c.id !== id),
       questions: d.questions.filter((q) => q.categoryId !== id),
@@ -108,6 +149,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const addQuestion = useCallback((input: Omit<AdminQuestion, 'id'>) => {
+    acceptRemote.current = false;
     const q: AdminQuestion = { ...input, id: genId('q') };
     setData((d) => ({ ...d, questions: [...d.questions, q] }));
     return q;
@@ -115,6 +157,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
 
   const updateQuestion = useCallback(
     (id: string, patch: Partial<AdminQuestion>) => {
+      acceptRemote.current = false;
       setData((d) => ({
         ...d,
         questions: d.questions.map((q) =>
@@ -126,6 +169,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   );
 
   const deleteQuestion = useCallback((id: string) => {
+    acceptRemote.current = false;
     setData((d) => ({
       ...d,
       questions: d.questions.filter((q) => q.id !== id),
@@ -133,6 +177,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const resetAll = useCallback(() => {
+    acceptRemote.current = false;
     setData(resetAdminData());
   }, []);
 
@@ -154,6 +199,8 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       resetAll,
       questionsFor,
       remoteSaveError,
+      remoteSaveErrorMessage,
+      retryRemoteSync,
     }),
     [
       data,
@@ -167,6 +214,8 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       resetAll,
       questionsFor,
       remoteSaveError,
+      remoteSaveErrorMessage,
+      retryRemoteSync,
     ]
   );
 

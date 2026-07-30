@@ -1,6 +1,5 @@
 import type { InteractiveCategory, QRSession } from './types';
 import {
-  ensureStateBucket,
   getState,
   putState,
   readCache,
@@ -52,15 +51,16 @@ export function loadInteractiveCategories(): InteractiveCategory[] {
 
 /** Async load from Supabase Storage (durable source of truth). */
 export async function loadInteractiveCategoriesRemote(): Promise<InteractiveCategory[]> {
-  await ensureStateBucket();
   const remote = await getState<InteractiveCategory[]>(REMOTE_KEY);
   if (remote && Array.isArray(remote)) {
     writeCache(CATEGORIES_KEY, remote);
     return remote;
   }
-  const local = loadInteractiveCategories();
-  await putState(REMOTE_KEY, local);
-  return local;
+  // No remote data (or network error) — return local WITHOUT uploading.
+  // Uploading here could overwrite another device's data on a transient
+  // network failure. The remote will be populated when the user makes
+  // actual changes (interactive context's debounced save handles that).
+  return loadInteractiveCategories();
 }
 
 /** Persist to localStorage cache (synchronous). */

@@ -25,6 +25,7 @@ export function formatReport(report: ImportReport): ReportStat[] {
     { label: 'مكررات', value: report.duplicates, tone: 'warning' },
     { label: 'تحذيرات', value: report.warnings, tone: 'warning' },
     { label: 'أخطاء', value: report.errors, tone: 'error' },
+    { label: 'صفوف فاشلة', value: report.failedRows.length, tone: 'error' },
     { label: 'تصنيفات مطابقة', value: report.matchedCategories, tone: 'info' },
     { label: 'تصنيفات جديدة', value: report.newCategories, tone: 'success' },
   ];

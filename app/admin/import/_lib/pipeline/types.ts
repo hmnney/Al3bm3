@@ -58,6 +58,10 @@ export interface ImportReport {
   duplicates: number;
   warnings: number;
   errors: number;
+  /** Row numbers (1-based) that threw an exception during import. */
+  failedRows: number[];
+  /** Error messages for failed rows, keyed by row number. */
+  failedRowErrors: Record<number, string>;
   newCategories: number;
   /** Categories matched to existing ones (not created). */
   matchedCategories: number;

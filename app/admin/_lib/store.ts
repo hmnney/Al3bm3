@@ -2,11 +2,11 @@ import { CATEGORIES } from '@/lib/constants';
 import type { AdminCategory, AdminData } from './types';
 import { toAdminCategory } from './types';
 import {
-  ensureStateBucket,
   getState,
   putState,
   readCache,
   writeCache,
+  type StorageResult,
 } from '@/lib/state-persistence';
 
 /**
@@ -38,15 +38,17 @@ export function loadAdminData(): AdminData {
 
 /** Async load from Supabase Storage (durable source of truth). Falls back to cache/seed. */
 export async function loadAdminDataRemote(): Promise<AdminData> {
-  await ensureStateBucket();
   const remote = await getState<AdminData>(REMOTE_KEY);
   if (remote && remote.categories && remote.questions) {
     writeCache(STORAGE_KEY, remote);
     return remote;
   }
-  const local = loadAdminData();
-  await putState(REMOTE_KEY, local);
-  return local;
+  // No remote data (or network error) — return local cache/seed WITHOUT
+  // uploading. Uploading the seed here could overwrite another device's
+  // imported questions if this was a transient network failure. The remote
+  // will be populated when the user makes actual changes (admin context's
+  // debounced save handles that).
+  return loadAdminData();
 }
 
 /** Persist to localStorage cache (synchronous). */
@@ -54,8 +56,8 @@ export function saveAdminData(data: AdminData): void {
   writeCache(STORAGE_KEY, data);
 }
 
-/** Persist to Supabase Storage (durable). Fire-and-forget; callers don't await. */
-export async function saveAdminDataRemote(data: AdminData): Promise<boolean> {
+/** Persist to Supabase Storage (durable). Returns detailed result. */
+export async function saveAdminDataRemote(data: AdminData): Promise<StorageResult> {
   return putState(REMOTE_KEY, data);
 }
 
