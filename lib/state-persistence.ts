@@ -72,11 +72,11 @@ export async function putState<T>(key: string, value: T): Promise<StorageResult>
     console.log('[state-persistence] upload START — size:', body.length, 'bytes');
 
     if (!hasSupabaseConfig) {
-      return { ok: false, error: 'Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY in .env' };
+      return { ok: false, error: 'Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in .env' };
     }
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
-    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? '';
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
     await rawStorageProbe(supabaseUrl, supabaseKey, BUCKET, path, body);
 
     const { error, data } = await supabase.storage
@@ -166,7 +166,7 @@ export async function getState<T>(key: string): Promise<T | null> {
     }
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
-    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? '';
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
     await rawDownloadProbe(supabaseUrl, supabaseKey, BUCKET, path);
 
     const { data, error } = await supabase.storage
