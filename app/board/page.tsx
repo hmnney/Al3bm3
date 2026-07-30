@@ -82,9 +82,11 @@ export default function BoardPage() {
     setInteractiveCats(loadInteractiveCategories());
     initSessions();
     setSessions(getAllSessions());
-    void loadInteractiveCategoriesRemote().then((remote) => {
-      setInteractiveCats(remote);
-      setSessions(getAllSessions());
+    void loadInteractiveCategoriesRemote().then((result) => {
+      if (result.status === 'found' && result.data) {
+        setInteractiveCats(result.data);
+        setSessions(getAllSessions());
+      }
     });
   }, []);
 
@@ -124,7 +126,11 @@ export default function BoardPage() {
 
   useEffect(() => {
     applyAdminData(loadAdminData());
-    void loadAdminDataRemote().then(applyAdminData);
+    void loadAdminDataRemote().then((result) => {
+      if (result.status === 'found' && result.data) {
+        applyAdminData(result.data);
+      }
+    });
   }, [applyAdminData]);
 
   const [activeQuestion, setActiveQuestion] = useState<ActiveQuestion | null>(

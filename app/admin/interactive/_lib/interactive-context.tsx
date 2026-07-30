@@ -76,8 +76,11 @@ export function InteractiveProvider({ children }: { children: ReactNode }) {
     initSessions();
     setSessions(getAllSessions());
     setReady(true);
-    void loadInteractiveCategoriesRemote().then((remote) => {
-      setCategories(remote);
+    void loadInteractiveCategoriesRemote().then((result) => {
+      console.log('[interactive-context] loadInteractiveCategoriesRemote resolved — status:', result.status, 'error:', result.error ?? '');
+      if (result.status === 'found' && result.data) {
+        setCategories(result.data);
+      }
     });
   }, []);
 

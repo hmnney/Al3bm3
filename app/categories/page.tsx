@@ -41,7 +41,11 @@ export default function CategoriesPage() {
   // categories — same data source as the admin panel.
   useEffect(() => {
     setInteractiveCats(loadInteractiveCategories());
-    void loadInteractiveCategoriesRemote().then(setInteractiveCats);
+    void loadInteractiveCategoriesRemote().then((result) => {
+      if (result.status === 'found' && result.data) {
+        setInteractiveCats(result.data);
+      }
+    });
   }, []);
 
   // Load admin-created categories (from import or manual creation) so they
@@ -50,7 +54,11 @@ export default function CategoriesPage() {
   useEffect(() => {
     const local = loadAdminData().categories;
     setAdminCats(local);
-    void loadAdminDataRemote().then((remote) => setAdminCats(remote.categories));
+    void loadAdminDataRemote().then((result) => {
+      if (result.status === 'found' && result.data) {
+        setAdminCats(result.data.categories);
+      }
+    });
   }, []);
 
   // Warm the cache for every category image so selection cards (and the later

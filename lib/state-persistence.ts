@@ -7,6 +7,10 @@ import { supabase, hasSupabaseConfig } from './supabase-client';
  * value in the `data` column (jsonb). localStorage is used as a fast
  * synchronous cache so the UI renders instantly; the database is the source
  * of truth so data survives project restarts and is shared across browsers.
+ *
+ * Every cloud operation is logged loudly. Errors are never swallowed silently —
+ * callers receive a result object that distinguishes "found", "not found",
+ * and "error" so they can decide explicitly whether to fall back to cache.
  */
 
 const TABLE = 'app_state';
@@ -19,18 +23,31 @@ export interface StorageResult {
   status?: number;
 }
 
+export interface LoadResult<T> {
+  /** "found" — data exists. "notfound" — row is absent. "error" — request failed. */
+  status: 'found' | 'notfound' | 'error';
+  data: T | null;
+  error?: string;
+}
+
 /** Write a JSON-serializable value to the `app_state` table (upsert by key). */
 export async function putState<T>(key: string, value: T): Promise<StorageResult> {
+  console.log('[state-persistence] SAVE START', { table: TABLE, key });
   try {
     if (!hasSupabaseConfig) {
+      console.error('[state-persistence] SAVE FAILED — Supabase not configured');
       return { ok: false, error: 'Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in .env' };
     }
 
-    const { error } = await supabase
+    console.log('[state-persistence] SAVE upsert', { table: TABLE, key, valueKeys: typeof value === 'object' && value ? Object.keys(value as Record<string, unknown>) : typeof value });
+
+    const { data: _data, error } = await supabase
       .from(TABLE)
-      .upsert({ id: key, data: value }, { onConflict: 'id' });
+      .upsert({ id: key, data: value }, { onConflict: 'id' })
+      .select();
 
     if (error) {
+      console.error('[state-persistence] SAVE FAILED', { key, error });
       return {
         ok: false,
         status: (error as { statusCode?: number }).statusCode,
@@ -38,8 +55,10 @@ export async function putState<T>(key: string, value: T): Promise<StorageResult>
       };
     }
 
+    console.log('[state-persistence] SAVE SUCCESS', { key, rowsReturned: _data?.length ?? 0 });
     return { ok: true };
   } catch (e) {
+    console.error('[state-persistence] SAVE EXCEPTION', { key, error: e });
     const msg = e instanceof Error ? e.message : String(e);
     return {
       ok: false,
@@ -48,12 +67,16 @@ export async function putState<T>(key: string, value: T): Promise<StorageResult>
   }
 }
 
-/** Read a JSON-serializable value from the `app_state` table by key. Returns null if missing/error. */
-export async function getState<T>(key: string): Promise<T | null> {
+/** Read a JSON-serializable value from the `app_state` table by key. */
+export async function getState<T>(key: string): Promise<LoadResult<T>> {
+  console.log('[state-persistence] LOAD START', { table: TABLE, key });
   try {
     if (!hasSupabaseConfig) {
-      return null;
+      console.error('[state-persistence] LOAD FAILED — Supabase not configured');
+      return { status: 'error', data: null, error: 'Supabase is not configured' };
     }
+
+    console.log('[state-persistence] LOAD select', { table: TABLE, key });
 
     const { data, error } = await supabase
       .from(TABLE)
@@ -62,20 +85,29 @@ export async function getState<T>(key: string): Promise<T | null> {
       .maybeSingle();
 
     if (error) {
-      console.error('[state-persistence] getState error:', {
-        key,
-        message: error.message,
-      });
-      return null;
-    }
-    if (!data) {
-      return null;
+      console.error('[state-persistence] LOAD FAILED', { key, error });
+      return {
+        status: 'error',
+        data: null,
+        error: `Database select failed for key "${key}" on table "${TABLE}": ${error.message}`,
+      };
     }
 
-    return (data as { data: T }).data;
+    if (!data) {
+      console.log('[state-persistence] LOAD NOT FOUND', { key, message: 'No row with this id exists in app_state' });
+      return { status: 'notfound', data: null };
+    }
+
+    console.log('[state-persistence] LOAD SUCCESS', { key, dataKeys: typeof (data as { data: unknown }).data === 'object' && (data as { data: Record<string, unknown> }).data ? Object.keys((data as { data: Record<string, unknown> }).data) : typeof (data as { data: unknown }).data });
+    return { status: 'found', data: (data as { data: T }).data };
   } catch (e) {
-    console.error('[state-persistence] getState exception:', { key, error: e });
-    return null;
+    console.error('[state-persistence] LOAD EXCEPTION', { key, error: e });
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      status: 'error',
+      data: null,
+      error: `Exception selecting key "${key}" from table "${TABLE}": ${msg}`,
+    };
   }
 }
 

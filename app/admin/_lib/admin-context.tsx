@@ -70,10 +70,10 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     console.log('[admin-context] hydrate START — loading from localStorage');
     setData(loadAdminData());
     setReady(true);
-    void loadAdminDataRemote().then((remote) => {
-      console.log('[admin-context] loadAdminDataRemote resolved — acceptRemote:', acceptRemote.current);
-      if (acceptRemote.current) {
-        setData(remote);
+    void loadAdminDataRemote().then((result) => {
+      console.log('[admin-context] loadAdminDataRemote resolved — status:', result.status, 'acceptRemote:', acceptRemote.current, 'error:', result.error ?? '');
+      if (acceptRemote.current && result.status === 'found' && result.data) {
+        setData(result.data);
       }
       remoteLoaded.current = true;
       console.log('[admin-context] remoteLoaded = true');

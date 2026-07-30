@@ -6,6 +6,7 @@ import {
   readCache,
   writeCache,
   type StorageResult,
+  type LoadResult,
 } from '@/lib/state-persistence';
 
 /**
@@ -87,19 +88,18 @@ export function loadSettings(): AllSettings {
   return initial;
 }
 
-/** Async load from Supabase Storage (durable source of truth). */
-export async function loadSettingsRemote(): Promise<AllSettings> {
-  const remote = await getState<AllSettings>(REMOTE_KEY);
-  if (remote) {
-    const merged = mergeSettings(remote);
+/** Async load from the app_state table (durable source of truth). */
+export async function loadSettingsRemote(): Promise<LoadResult<AllSettings>> {
+  const result = await getState<AllSettings>(REMOTE_KEY);
+  if (result.status === 'found' && result.data) {
+    const merged = mergeSettings(result.data);
     writeCache(STORAGE_KEY, merged);
-    return merged;
+    return { status: 'found', data: merged };
   }
-  // No remote data (or network error) — return local WITHOUT uploading.
-  // Uploading here could overwrite another device's settings on a transient
-  // network failure. The remote will be populated when the user makes
-  // actual changes (settings context's debounced save handles that).
-  return loadSettings();
+  // notfound or error — return local cache WITHOUT uploading. Uploading here
+  // could overwrite another device's settings on a transient network failure.
+  console.log('[settings-store] loadSettingsRemote — no remote data, returning cache. status:', result.status, result.error ?? '');
+  return { status: result.status, data: loadSettings(), error: result.error };
 }
 
 /** Persist to localStorage cache (synchronous). */

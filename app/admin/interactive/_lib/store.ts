@@ -4,6 +4,7 @@ import {
   putState,
   readCache,
   writeCache,
+  type LoadResult,
 } from '@/lib/state-persistence';
 
 /**
@@ -49,18 +50,16 @@ export function loadInteractiveCategories(): InteractiveCategory[] {
   return initial;
 }
 
-/** Async load from Supabase Storage (durable source of truth). */
-export async function loadInteractiveCategoriesRemote(): Promise<InteractiveCategory[]> {
-  const remote = await getState<InteractiveCategory[]>(REMOTE_KEY);
-  if (remote && Array.isArray(remote)) {
-    writeCache(CATEGORIES_KEY, remote);
-    return remote;
+/** Async load from the app_state table (durable source of truth). */
+export async function loadInteractiveCategoriesRemote(): Promise<LoadResult<InteractiveCategory[]>> {
+  const result = await getState<InteractiveCategory[]>(REMOTE_KEY);
+  if (result.status === 'found' && result.data && Array.isArray(result.data)) {
+    writeCache(CATEGORIES_KEY, result.data);
+    return { status: 'found', data: result.data };
   }
   // No remote data (or network error) — return local WITHOUT uploading.
-  // Uploading here could overwrite another device's data on a transient
-  // network failure. The remote will be populated when the user makes
-  // actual changes (interactive context's debounced save handles that).
-  return loadInteractiveCategories();
+  console.log('[interactive-store] loadInteractiveCategoriesRemote — no remote data, returning cache. status:', result.status, result.error ?? '');
+  return { status: result.status, data: loadInteractiveCategories(), error: result.error };
 }
 
 /** Persist to localStorage cache (synchronous). */

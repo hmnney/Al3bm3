@@ -7,6 +7,7 @@ import {
   readCache,
   writeCache,
   type StorageResult,
+  type LoadResult,
 } from '@/lib/state-persistence';
 
 /**
@@ -36,19 +37,17 @@ export function loadAdminData(): AdminData {
   return initial;
 }
 
-/** Async load from Supabase Storage (durable source of truth). Falls back to cache/seed. */
-export async function loadAdminDataRemote(): Promise<AdminData> {
-  const remote = await getState<AdminData>(REMOTE_KEY);
-  if (remote && remote.categories && remote.questions) {
-    writeCache(STORAGE_KEY, remote);
-    return remote;
+/** Async load from the app_state table (durable source of truth). */
+export async function loadAdminDataRemote(): Promise<LoadResult<AdminData>> {
+  const result = await getState<AdminData>(REMOTE_KEY);
+  if (result.status === 'found' && result.data && result.data.categories && result.data.questions) {
+    writeCache(STORAGE_KEY, result.data);
+    return result;
   }
-  // No remote data (or network error) — return local cache/seed WITHOUT
-  // uploading. Uploading the seed here could overwrite another device's
-  // imported questions if this was a transient network failure. The remote
-  // will be populated when the user makes actual changes (admin context's
-  // debounced save handles that).
-  return loadAdminData();
+  // notfound or error — return local cache/seed WITHOUT uploading, but
+  // propagate the status so the caller can distinguish the two.
+  console.log('[admin-store] loadAdminDataRemote — no remote data, returning cache. status:', result.status, result.error ?? '');
+  return { status: result.status, data: loadAdminData(), error: result.error };
 }
 
 /** Persist to localStorage cache (synchronous). */

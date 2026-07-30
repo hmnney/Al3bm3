@@ -58,10 +58,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     console.log('[settings-context] hydrate START — loading from localStorage');
     setSettings(loadSettings());
     setReady(true);
-    void loadSettingsRemote().then((remote) => {
-      console.log('[settings-context] loadSettingsRemote resolved — acceptRemote:', acceptRemote.current);
-      if (acceptRemote.current) {
-        setSettings(remote);
+    void loadSettingsRemote().then((result) => {
+      console.log('[settings-context] loadSettingsRemote resolved — status:', result.status, 'acceptRemote:', acceptRemote.current, 'error:', result.error ?? '');
+      if (acceptRemote.current && result.status === 'found' && result.data) {
+        setSettings(result.data);
       }
       remoteLoaded.current = true;
       console.log('[settings-context] remoteLoaded = true');
