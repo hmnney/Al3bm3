@@ -27,6 +27,9 @@ import {
   Search,
   EyeOff,
   Film,
+  RefreshCw,
+  Copy,
+  CopyCheck,
 } from 'lucide-react';
 import { useAdmin } from '../_lib/admin-context';
 import { useToast } from '@/hooks/use-toast';
@@ -47,12 +50,13 @@ import { uploadPosterImage, type UploadResult } from '@/lib/poster-storage';
 import { RedactionEditor } from '@/components/game/redaction-editor';
 import {
   searchMovies,
-  popularMovies,
   searchTv,
   tmdbPosterUrl,
   downloadPosterAsDataUri,
+  fetchUntilEnough,
   TMDB_CONFIGURED,
   type TmdbMovie,
+  type TmdbMediaType,
 } from '@/lib/tmdb';
 
 type PosterCategory = 'movie-posters' | 'tv-posters' | 'anime-posters' | 'game-posters';
@@ -62,13 +66,14 @@ interface PosterCategoryMeta {
   label: string;
   question: string;
   icon: React.ElementType;
+  mediaType: TmdbMediaType;
 }
 
 const POSTER_CATEGORIES: PosterCategoryMeta[] = [
-  { id: 'movie-posters', label: 'Movie Posters', question: 'What is the name of this movie?', icon: Clapperboard },
-  { id: 'tv-posters', label: 'TV Posters', question: 'What is the name of this TV series?', icon: Tv },
-  { id: 'anime-posters', label: 'Anime Posters', question: 'What is the name of this anime?', icon: Sparkles },
-  { id: 'game-posters', label: 'Game Posters', question: 'What is the name of this game?', icon: Gamepad2 },
+  { id: 'movie-posters', label: 'Movie Posters', question: 'What is the name of this movie?', icon: Clapperboard, mediaType: 'movie' },
+  { id: 'tv-posters', label: 'TV Posters', question: 'What is the name of this TV series?', icon: Tv, mediaType: 'tv' },
+  { id: 'anime-posters', label: 'Anime Posters', question: 'What is the name of this anime?', icon: Sparkles, mediaType: 'tv' },
+  { id: 'game-posters', label: 'Game Posters', question: 'What is the name of this game?', icon: Gamepad2, mediaType: 'movie' },
 ];
 
 const DIFFICULTY_POINTS: { points: PointValue; label: string }[] = [
@@ -76,6 +81,14 @@ const DIFFICULTY_POINTS: { points: PointValue; label: string }[] = [
   { points: 500, label: '500' },
   { points: 750, label: '750' },
 ];
+
+/** Quota per category per difficulty. */
+const IMPORT_QUOTA: Record<PosterCategory, Record<PointValue, number>> = {
+  'movie-posters': { 250: 40, 500: 35, 750: 25 },
+  'tv-posters': { 250: 40, 500: 35, 750: 25 },
+  'anime-posters': { 250: 40, 500: 35, 750: 25 },
+  'game-posters': { 250: 40, 500: 35, 750: 25 },
+};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -111,7 +124,7 @@ interface PendingPoster {
   alreadyPrepared: boolean;
 }
 
-type BlindStatus = 'idle' | 'processing' | 'imported' | 'failed';
+type BlindStatus = 'idle' | 'processing' | 'imported' | 'skipped' | 'failed';
 
 interface BlindCard {
   id: string;
@@ -120,6 +133,14 @@ interface BlindCard {
   label: string;
   status: BlindStatus;
   error?: string;
+}
+
+interface BlindImportStats {
+  moviesImported: number;
+  tvImported: number;
+  duplicatesSkipped: number;
+  duplicatesReplaced: number;
+  remainingDuplicates: number;
 }
 
 type Summary = { imported: number; skipped: number; failed: number } | null;
@@ -134,6 +155,35 @@ function genLocalId(): string {
 
 function pad3(n: number): string {
   return n.toString().padStart(3, '0');
+}
+
+/** Count duplicate tmdb_id values in the question list. */
+function countDuplicates(questions: AdminQuestion[]): number {
+  const seen = new Map<number, number>();
+  for (const q of questions) {
+    if (q.tmdb_id == null) continue;
+    seen.set(q.tmdb_id, (seen.get(q.tmdb_id) ?? 0) + 1);
+  }
+  let dupes = 0;
+  seen.forEach((count) => {
+    if (count > 1) dupes += count - 1;
+  });
+  return dupes;
+}
+
+/** Find the ids of duplicate questions (keep first, mark rest for deletion). */
+function findDuplicateIds(questions: AdminQuestion[]): string[] {
+  const seen = new Map<number, AdminQuestion>();
+  const dupes: string[] = [];
+  for (const q of questions) {
+    if (q.tmdb_id == null) continue;
+    if (seen.has(q.tmdb_id)) {
+      dupes.push(q.id);
+    } else {
+      seen.set(q.tmdb_id, q);
+    }
+  }
+  return dupes;
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +203,9 @@ export default function PostersPage() {
 
   // Blind mode state
   const [blindCards, setBlindCards] = useState<BlindCard[]>([]);
+  const [blindImporting, setBlindImporting] = useState(false);
+  const [blindStats, setBlindStats] = useState<BlindImportStats | null>(null);
+  const [regenerating, setRegenerating] = useState(false);
 
   // Upload mode state
   const [pending, setPending] = useState<PendingPoster[]>([]);
@@ -170,6 +223,20 @@ export default function PostersPage() {
     return data.questions.filter((q) => ids.has(q.categoryId));
   }, [data.questions]);
 
+  /** Set of all tmdb_ids currently in the database. */
+  const existingTmdbIds = useMemo(() => {
+    const s = new Set<number>();
+    for (const q of data.questions) {
+      if (q.tmdb_id != null) s.add(q.tmdb_id);
+    }
+    return s;
+  }, [data.questions]);
+
+  const duplicateCount = useMemo(
+    () => countDuplicates(data.questions),
+    [data.questions]
+  );
+
   // -------------------------------------------------------------------------
   // Blind mode: TMDB search + import
   // -------------------------------------------------------------------------
@@ -183,112 +250,369 @@ export default function PostersPage() {
     setBlindCards([]);
     try {
       let results: TmdbMovie[];
-      const isTv = globalCategory === 'tv-posters' || globalCategory === 'anime-posters';
+      const meta = POSTER_CATEGORIES.find((c) => c.id === globalCategory)!;
       if (searchQuery.trim()) {
-        const res = isTv
-          ? await searchTv(searchQuery.trim())
-          : await searchMovies(searchQuery.trim());
+        const res =
+          meta.mediaType === 'tv'
+            ? await searchTv(searchQuery.trim())
+            : await searchMovies(searchQuery.trim());
         results = res.results.filter((m) => m.poster_path);
       } else {
-        const res = await popularMovies();
-        results = res.results.filter((m) => m.poster_path);
+        // No search query — fetch from random pages
+        results = await fetchUntilEnough(20, meta.mediaType, existingTmdbIds);
       }
       const cards: BlindCard[] = results.slice(0, 20).map((movie, i) => ({
         id: genLocalId(),
         movie,
-        label: `Movie #${pad3(i + 1)}`,
+        label: `#${pad3(i + 1)}`,
         status: 'idle',
       }));
       setBlindCards(cards);
       if (cards.length === 0) {
-        toast({ title: 'No results', description: 'TMDB returned no movies with posters.', variant: 'destructive' });
+        toast({ title: 'No results', description: 'TMDB returned no items with posters.', variant: 'destructive' });
       }
     } catch {
       toast({ title: 'تعذر الاتصال بـ TMDB', description: 'Search failed.', variant: 'destructive' });
     } finally {
       setSearching(false);
     }
-  }, [globalCategory, searchQuery, toast]);
+  }, [globalCategory, searchQuery, existingTmdbIds, toast]);
 
   const updateBlindCard = useCallback((id: string, patch: Partial<BlindCard>) => {
     setBlindCards((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   }, []);
 
   /**
-   * Blind import: runs the entire pipeline internally without ever showing
-   * the poster, title, or OCR output to the user.
+   * Process a single TMDB movie through the blind pipeline:
+   * download → OCR → redact → upload → save.
+   * Returns true on success, false on failure.
+   */
+  const processBlindItem = useCallback(
+    async (
+      movie: TmdbMovie,
+      category: PosterCategory,
+      points: PointValue
+    ): Promise<boolean> => {
+      const meta = POSTER_CATEGORIES.find((c) => c.id === category)!;
+
+      // 1. Download poster from TMDB → data URI
+      const posterDataUri = await downloadPosterAsDataUri(movie.poster_path!, 'w500');
+
+      // 2. Run OCR + auto-detect title regions
+      let rects: RedactRect[] = [];
+      try {
+        const ocr = await detectText(posterDataUri);
+        if (ocr.words.length > 0) {
+          const img = new Image();
+          img.src = posterDataUri;
+          await new Promise<void>((resolve) => {
+            img.onload = () => resolve();
+            img.onerror = () => resolve();
+          });
+          rects = pickTitleRegions(ocr.words, img.naturalWidth, img.naturalHeight);
+        }
+      } catch {
+        // OCR failure is non-fatal
+      }
+
+      // 3. Apply redactions
+      let editedDataUri = posterDataUri;
+      if (rects.length > 0) {
+        try {
+          editedDataUri = await applyRedactions(posterDataUri, rects);
+        } catch {
+          // Use original if redaction fails
+        }
+      }
+
+      // 4. Upload to Supabase Storage
+      const upload = await uploadPosterImage(editedDataUri);
+
+      // 5. Save question with TMDB title as answer
+      addQuestion({
+        categoryId: category,
+        difficulty: points === 250 ? 'easy' : points === 500 ? 'medium' : 'hard',
+        points,
+        question: meta.question,
+        answer: movie.title,
+        image: upload.url,
+        video: undefined,
+        audio: undefined,
+        tmdb_id: movie.id,
+        tmdb_media: meta.mediaType,
+      });
+
+      return true;
+    },
+    [addQuestion]
+  );
+
+  /**
+   * Blind import for a single card (manual click).
    */
   const blindImport = useCallback(
     async (card: BlindCard) => {
+      if (existingTmdbIds.has(card.movie.id)) {
+        updateBlindCard(card.id, { status: 'skipped', error: 'Duplicate' });
+        return;
+      }
       updateBlindCard(card.id, { status: 'processing' });
-      const meta = POSTER_CATEGORIES.find((c) => c.id === globalCategory)!;
-
       try {
-        // 1. Download poster from TMDB → data URI
-        const posterDataUri = await downloadPosterAsDataUri(card.movie.poster_path!, 'w500');
-
-        // 2. Run OCR
-        let rects: RedactRect[] = [];
-        try {
-          const ocr = await detectText(posterDataUri);
-          if (ocr.words.length > 0) {
-            const img = new Image();
-            img.src = posterDataUri;
-            await new Promise<void>((resolve) => {
-              img.onload = () => resolve();
-              img.onerror = () => resolve();
-            });
-            rects = pickTitleRegions(ocr.words, img.naturalWidth, img.naturalHeight);
-          }
-        } catch {
-          // OCR failure is non-fatal — we still save with whatever redactions we can
-        }
-
-        // 3. Apply redactions
-        let editedDataUri = posterDataUri;
-        if (rects.length > 0) {
-          try {
-            editedDataUri = await applyRedactions(posterDataUri, rects);
-          } catch {
-            // Use original if redaction fails
-          }
-        }
-
-        // 4. Upload to Supabase Storage
-        const upload = await uploadPosterImage(editedDataUri);
-
-        // 5. Save question with TMDB title as answer
-        addQuestion({
-          categoryId: globalCategory,
-          difficulty: globalPoints === 250 ? 'easy' : globalPoints === 500 ? 'medium' : 'hard',
-          points: globalPoints,
-          question: meta.question,
-          answer: card.movie.title,
-          image: upload.url,
-          video: undefined,
-          audio: undefined,
-        });
-
+        await processBlindItem(card.movie, globalCategory, globalPoints);
         updateBlindCard(card.id, { status: 'imported' });
       } catch (e) {
         updateBlindCard(card.id, {
           status: 'failed',
           error: e instanceof Error ? e.message : 'Import failed',
         });
-        toast({ title: 'Import failed', description: e instanceof Error ? e.message : 'Unknown error', variant: 'destructive' });
       }
     },
-    [globalCategory, globalPoints, addQuestion, updateBlindCard, toast]
+    [existingTmdbIds, globalCategory, globalPoints, processBlindItem, updateBlindCard]
   );
 
-  const blindImportAll = useCallback(async () => {
-    const idle = blindCards.filter((c) => c.status === 'idle');
-    if (idle.length === 0) return;
-    for (const card of idle) {
-      await blindImport(card);
+  /**
+   * Full quota-based blind import:
+   * - Fetch enough unique items for all three difficulties
+   * - Check DB for existing tmdb_ids, skip duplicates
+   * - Keep fetching more pages until quota is met
+   * - Print stats
+   */
+  const blindImportQuota = useCallback(async () => {
+    if (!TMDB_CONFIGURED) {
+      toast({ title: 'تعذر الاتصال بـ TMDB', description: 'API key not configured.', variant: 'destructive' });
+      return;
     }
-    toast({ title: 'Blind import complete' });
-  }, [blindCards, blindImport, toast]);
+    setBlindImporting(true);
+    setBlindStats(null);
+    setBlindCards([]);
+
+    const stats: BlindImportStats = {
+      moviesImported: 0,
+      tvImported: 0,
+      duplicatesSkipped: 0,
+      duplicatesReplaced: 0,
+      remainingDuplicates: 0,
+    };
+
+    try {
+      const meta = POSTER_CATEGORIES.find((c) => c.id === globalCategory)!;
+      const quota = IMPORT_QUOTA[globalCategory];
+      const totalNeeded = quota[250] + quota[500] + quota[750];
+
+      // Build exclude set from current DB
+      const excludeIds = new Set(existingTmdbIds);
+
+      // Fetch enough unique items
+      const movies = await fetchUntilEnough(totalNeeded, meta.mediaType, excludeIds, 40);
+
+      // Build blind cards for display
+      const cards: BlindCard[] = movies.map((movie, i) => ({
+        id: genLocalId(),
+        movie,
+        label: `#${pad3(i + 1)}`,
+        status: 'idle',
+      }));
+      setBlindCards(cards);
+
+      // Import in order: 250-point first, then 500, then 750
+      let idx = 0;
+      const difficulties: PointValue[] = [250, 500, 750];
+
+      for (const points of difficulties) {
+        const count = quota[points];
+        for (let i = 0; i < count; i++) {
+          // Find next idle card
+          while (idx < cards.length && cards[idx].status !== 'idle') idx++;
+          if (idx >= cards.length) break;
+
+          const card = cards[idx];
+          updateBlindCard(card.id, { status: 'processing' });
+
+          // Double-check DB for duplicates (may have been added by concurrent flow)
+          if (excludeIds.has(card.movie.id)) {
+            updateBlindCard(card.id, { status: 'skipped', error: 'Duplicate' });
+            stats.duplicatesSkipped++;
+            continue;
+          }
+
+          try {
+            await processBlindItem(card.movie, globalCategory, points);
+            excludeIds.add(card.movie.id);
+            updateBlindCard(card.id, { status: 'imported' });
+            if (meta.mediaType === 'movie') stats.moviesImported++;
+            else stats.tvImported++;
+          } catch {
+            updateBlindCard(card.id, { status: 'failed', error: 'Import failed' });
+          }
+          idx++;
+        }
+      }
+
+      // If we didn't get enough, fetch more
+      const importedCount = stats.moviesImported + stats.tvImported;
+      if (importedCount < totalNeeded) {
+        const stillNeeded = totalNeeded - importedCount;
+        const more = await fetchUntilEnough(stillNeeded, meta.mediaType, excludeIds, 20);
+        for (const movie of more) {
+          if (excludeIds.has(movie.id)) {
+            stats.duplicatesSkipped++;
+            continue;
+          }
+          // Assign to the first difficulty that still needs items
+          let assignedPoints: PointValue | null = null;
+          for (const points of difficulties) {
+            const importedAtThisLevel = cards.filter(
+              (c) => c.status === 'imported' && c.movie.id === movie.id
+            ).length;
+            if (importedAtThisLevel < quota[points]) {
+              assignedPoints = points;
+              break;
+            }
+          }
+          if (!assignedPoints) assignedPoints = 250;
+
+          const newCard: BlindCard = {
+            id: genLocalId(),
+            movie,
+            label: `#${pad3(cards.length + 1)}`,
+            status: 'processing',
+          };
+          setBlindCards((prev) => [...prev, newCard]);
+          try {
+            await processBlindItem(movie, globalCategory, assignedPoints);
+            excludeIds.add(movie.id);
+            updateBlindCard(newCard.id, { status: 'imported' });
+            if (meta.mediaType === 'movie') stats.moviesImported++;
+            else stats.tvImported++;
+          } catch {
+            updateBlindCard(newCard.id, { status: 'failed', error: 'Import failed' });
+          }
+        }
+      }
+
+      stats.remainingDuplicates = countDuplicates(
+        data.questions.filter((q) => q.tmdb_id != null)
+      );
+
+      setBlindStats(stats);
+
+      console.log('=== Blind Import Results ===');
+      console.log(`Movies imported: ${stats.moviesImported}`);
+      console.log(`TV imported: ${stats.tvImported}`);
+      console.log(`Duplicates skipped: ${stats.duplicatesSkipped}`);
+      console.log(`Duplicates replaced: ${stats.duplicatesReplaced}`);
+      console.log(`Remaining duplicates: ${stats.remainingDuplicates}`);
+      console.log('============================');
+    } catch {
+      toast({ title: 'تعذر الاتصال بـ TMDB', description: 'Import failed.', variant: 'destructive' });
+    } finally {
+      setBlindImporting(false);
+    }
+  }, [globalCategory, existingTmdbIds, processBlindItem, updateBlindCard, data.questions, toast]);
+
+  /**
+   * Regenerate duplicates:
+   * - Detect duplicate tmdb_id values
+   * - Delete duplicates (keep first occurrence)
+   * - Replace each deleted item with a new unique TMDB item
+   */
+  const regenerateDuplicates = useCallback(async () => {
+    const dupes = findDuplicateIds(data.questions);
+    if (dupes.length === 0) {
+      toast({ title: 'No duplicates found', description: 'All tmdb_id values are unique.' });
+      return;
+    }
+
+    setRegenerating(true);
+    try {
+      // Delete duplicate questions
+      for (const id of dupes) {
+        deleteQuestion(id);
+      }
+
+      // Wait a tick for state to settle
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Fetch replacements: one new unique item per deleted duplicate
+      const excludeIds = new Set(existingTmdbIds);
+      const replacements = await fetchUntilEnough(dupes.length, 'movie', excludeIds, 20);
+
+      let replaced = 0;
+      for (const movie of replacements) {
+        if (replaced >= dupes.length) break;
+        if (excludeIds.has(movie.id)) continue;
+
+        try {
+          const posterDataUri = await downloadPosterAsDataUri(movie.poster_path!, 'w500');
+
+          // OCR + redact
+          let rects: RedactRect[] = [];
+          try {
+            const ocr = await detectText(posterDataUri);
+            if (ocr.words.length > 0) {
+              const img = new Image();
+              img.src = posterDataUri;
+              await new Promise<void>((resolve) => {
+                img.onload = () => resolve();
+                img.onerror = () => resolve();
+              });
+              rects = pickTitleRegions(ocr.words, img.naturalWidth, img.naturalHeight);
+            }
+          } catch {
+            // non-fatal
+          }
+
+          let editedDataUri = posterDataUri;
+          if (rects.length > 0) {
+            try {
+              editedDataUri = await applyRedactions(posterDataUri, rects);
+            } catch {
+              // use original
+            }
+          }
+
+          const upload = await uploadPosterImage(editedDataUri);
+
+          addQuestion({
+            categoryId: 'movie-posters',
+            difficulty: 'easy',
+            points: 250,
+            question: 'What is the name of this movie?',
+            answer: movie.title,
+            image: upload.url,
+            video: undefined,
+            audio: undefined,
+            tmdb_id: movie.id,
+            tmdb_media: 'movie',
+          });
+
+          excludeIds.add(movie.id);
+          replaced++;
+        } catch {
+          // skip failed item
+        }
+      }
+
+      const remaining = countDuplicates(
+        data.questions.filter((q) => q.tmdb_id != null)
+      );
+
+      toast({
+        title: 'Regenerate complete',
+        description: `Deleted ${dupes.length} duplicates, replaced ${replaced}. Remaining duplicates: ${remaining}`,
+      });
+
+      console.log('=== Regenerate Duplicates ===');
+      console.log(`Duplicates deleted: ${dupes.length}`);
+      console.log(`Duplicates replaced: ${replaced}`);
+      console.log(`Remaining duplicates: ${remaining}`);
+      console.log('=============================');
+    } catch {
+      toast({ title: 'Regenerate failed', variant: 'destructive' });
+    } finally {
+      setRegenerating(false);
+    }
+  }, [data.questions, deleteQuestion, existingTmdbIds, addQuestion, toast]);
 
   // -------------------------------------------------------------------------
   // Upload mode: existing drag & drop workflow
@@ -588,6 +912,8 @@ export default function PostersPage() {
   const blindImportedCount = blindCards.filter((c) => c.status === 'imported').length;
   const blindProcessingCount = blindCards.filter((c) => c.status === 'processing').length;
   const blindIdleCount = blindCards.filter((c) => c.status === 'idle').length;
+  const blindSkippedCount = blindCards.filter((c) => c.status === 'skipped').length;
+  const blindFailedCount = blindCards.filter((c) => c.status === 'failed').length;
 
   // -------------------------------------------------------------------------
   // Render
@@ -624,6 +950,7 @@ export default function PostersPage() {
                 onClick={() => {
                   setBlindMode(!blindMode);
                   setBlindCards([]);
+                  setBlindStats(null);
                 }}
                 className={cn(
                   'relative h-7 w-12 rounded-full transition-colors',
@@ -644,7 +971,7 @@ export default function PostersPage() {
             </label>
             {blindMode && (
               <span className="text-xs font-semibold text-muted-foreground">
-                {blindImportedCount} imported · {blindProcessingCount} processing · {blindIdleCount} ready
+                {blindImportedCount} imported · {blindProcessingCount} processing · {blindIdleCount} ready · {blindSkippedCount} skipped · {blindFailedCount} failed
               </span>
             )}
           </div>
@@ -742,6 +1069,46 @@ export default function PostersPage() {
       {/* ============================================================= */}
       {blindMode ? (
         <div>
+          {/* Quota import + regenerate */}
+          <div className="mb-6 flex flex-wrap gap-3">
+            <button
+              onClick={() => void blindImportQuota()}
+              disabled={blindImporting || !TMDB_CONFIGURED}
+              className="inline-flex items-center gap-2 rounded-full bg-brand-gradient px-5 py-2.5 text-sm font-bold text-white shadow-lg transition-all hover:opacity-90 disabled:opacity-50"
+            >
+              {blindImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />}
+              Import Full Quota (100 items)
+            </button>
+
+            <button
+              onClick={() => void regenerateDuplicates()}
+              disabled={regenerating || duplicateCount === 0}
+              className="inline-flex items-center gap-2 rounded-full border-2 border-amber-500/40 bg-amber-500/10 px-5 py-2.5 text-sm font-bold text-amber-600 transition-all hover:border-amber-500 disabled:opacity-50 dark:text-amber-400"
+            >
+              {regenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              Regenerate Duplicates{duplicateCount > 0 ? ` (${duplicateCount})` : ''}
+            </button>
+          </div>
+
+          {/* Stats */}
+          {blindStats && (
+            <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
+              <StatCard label="Movies imported" value={blindStats.moviesImported} icon={Film} tone="success" />
+              <StatCard label="TV imported" value={blindStats.tvImported} icon={Tv} tone="success" />
+              <StatCard label="Duplicates skipped" value={blindStats.duplicatesSkipped} icon={Copy} tone="warning" />
+              <StatCard label="Duplicates replaced" value={blindStats.duplicatesReplaced} icon={CopyCheck} tone="info" />
+              <StatCard label="Remaining duplicates" value={blindStats.remainingDuplicates} icon={Copy} tone={blindStats.remainingDuplicates === 0 ? 'success' : 'error'} />
+            </div>
+          )}
+
+          {/* Duplicate counter */}
+          {duplicateCount > 0 && !blindStats && (
+            <div className="mb-4 flex items-center gap-2 rounded-xl border-2 border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-600 dark:text-amber-400">
+              <Copy className="h-4 w-4 shrink-0" />
+              {duplicateCount} duplicate tmdb_id values detected in the database. Click "Regenerate Duplicates" to fix.
+            </div>
+          )}
+
           {/* Blind cards */}
           {blindCards.length > 0 && (
             <>
@@ -749,14 +1116,11 @@ export default function PostersPage() {
                 <h2 className="text-lg font-black text-foreground">
                   Blind Results ({blindCards.length})
                 </h2>
-                <button
-                  onClick={() => void blindImportAll()}
-                  disabled={blindIdleCount === 0 || blindProcessingCount > 0}
-                  className="inline-flex items-center gap-1.5 rounded-full bg-brand-gradient px-4 py-1.5 text-xs font-bold text-white shadow-lg transition-all hover:opacity-90 disabled:opacity-50"
-                >
-                  <Check className="h-3.5 w-3.5" />
-                  Import All ({blindIdleCount})
-                </button>
+                {!blindImporting && blindIdleCount > 0 && (
+                  <span className="text-xs font-semibold text-muted-foreground">
+                    Click any card to import individually
+                  </span>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
@@ -778,19 +1142,23 @@ export default function PostersPage() {
             </div>
           )}
 
-          {!searching && blindCards.length === 0 && (
+          {blindImporting && blindCards.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-16">
+              <Loader2 className="mb-3 h-8 w-8 animate-spin text-primary" />
+              <p className="text-sm font-semibold text-muted-foreground">Fetching random TMDB pages...</p>
+            </div>
+          )}
+
+          {!searching && !blindImporting && blindCards.length === 0 && (
             <div className="rounded-2xl border-2 border-dashed border-border/50 bg-card/30 p-8 text-center">
               <Film className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">
-                Search TMDB above. Results appear as blind cards — you will never see posters or titles.
+                Click "Import Full Quota" to fetch 100 unique items across all difficulties, or search above for individual blind imports.
               </p>
             </div>
           )}
         </div>
       ) : (
-        /* ============================================================= */
-        /* UPLOAD MODE (existing workflow)                                */
-        /* ============================================================= */
         <div>
           {/* Drop zone */}
           <div
@@ -912,6 +1280,32 @@ export default function PostersPage() {
 // Sub-components
 // ---------------------------------------------------------------------------
 
+function StatCard({
+  label,
+  value,
+  icon: Icon,
+  tone,
+}: {
+  label: string;
+  value: number;
+  icon: React.ElementType;
+  tone: 'success' | 'warning' | 'error' | 'info';
+}) {
+  const colors = {
+    success: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+    warning: 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400',
+    error: 'border-destructive/40 bg-destructive/10 text-destructive',
+    info: 'border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400',
+  };
+  return (
+    <div className={cn('flex flex-col items-center gap-1 rounded-2xl border-2 p-3 text-center', colors[tone])}>
+      <Icon className="h-5 w-5" />
+      <span className="text-2xl font-black leading-none">{value}</span>
+      <span className="text-[10px] font-semibold uppercase tracking-wide">{label}</span>
+    </div>
+  );
+}
+
 function SummaryCard({
   label,
   value,
@@ -955,6 +1349,7 @@ function BlindCardItem({
         card.status === 'idle' && 'cursor-pointer border-border/50 bg-card/40 hover:border-primary/40 hover:bg-card/60',
         card.status === 'processing' && 'border-primary/40 bg-primary/5',
         card.status === 'imported' && 'border-emerald-500/40 bg-emerald-500/10',
+        card.status === 'skipped' && 'border-amber-500/40 bg-amber-500/10',
         card.status === 'failed' && 'border-destructive/40 bg-destructive/5'
       )}
     >
@@ -976,6 +1371,13 @@ function BlindCardItem({
           <CheckCircle2 className="h-8 w-8 text-emerald-500" />
           <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">{card.label}</span>
           <span className="text-[10px] font-semibold text-emerald-600/70 dark:text-emerald-400/70">Imported</span>
+        </>
+      )}
+      {card.status === 'skipped' && (
+        <>
+          <Copy className="h-8 w-8 text-amber-500" />
+          <span className="text-sm font-black text-amber-600 dark:text-amber-400">{card.label}</span>
+          <span className="text-[10px] font-semibold text-amber-600/70 dark:text-amber-400/70">Skipped (duplicate)</span>
         </>
       )}
       {card.status === 'failed' && (

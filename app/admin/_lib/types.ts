@@ -39,6 +39,10 @@ export interface AdminQuestion {
   image?: string;
   audio?: string;
   video?: string;
+  /** TMDB numeric id, for duplicate detection on poster imports. */
+  tmdb_id?: number;
+  /** Media type for TMDB: 'movie' | 'tv'. */
+  tmdb_media?: 'movie' | 'tv';
 }
 
 /** The full admin dataset, persisted to localStorage as one blob. */
