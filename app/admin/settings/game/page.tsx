@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { Sliders, Save, RotateCcw } from 'lucide-react';
+import Link from 'next/link';
+import { Sliders, Save, RotateCcw, Cloud } from 'lucide-react';
 import { useSettings } from '../../_lib/settings-context';
 import { useToast } from '@/hooks/use-toast';
 import { AdminPageHeader } from '../../_components/admin-page-header';
@@ -144,6 +145,23 @@ export default function GameSettingsPage() {
             </div>
           </SettingRow>
         </SettingsCard>
+
+        <Link
+          href="/admin/settings/cloud-debug"
+          className="group flex items-center gap-4 rounded-2xl border-2 border-dashed border-border/50 bg-card/30 p-5 backdrop-blur transition-all hover:border-primary/40 hover:bg-card/50"
+        >
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 to-blue-600 text-white shadow-lg">
+            <Cloud className="h-5 w-5" />
+          </div>
+          <div className="flex flex-1 flex-col">
+            <span className="text-base font-black text-foreground">
+              Cloud Debug
+            </span>
+            <span className="text-sm text-muted-foreground">
+              فحص اتصال قاعدة البيانات والسحابة
+            </span>
+          </div>
+        </Link>
       </div>
     </div>
   );
