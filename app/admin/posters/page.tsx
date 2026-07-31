@@ -93,6 +93,8 @@ interface PendingPoster {
   error?: string;
   questionId?: string;
   uploadMethod?: 'storage' | 'data-uri';
+  /** When true, skip OCR + redaction and use the image as-is. */
+  alreadyPrepared: boolean;
 }
 
 type Summary = { imported: number; skipped: number; failed: number } | null;
@@ -134,7 +136,7 @@ export default function PostersPage() {
       let dataUri: string;
       try {
         dataUri = await fileToDataUri(poster.file);
-        updatePending(poster.id, { originalDataUri: dataUri, status: 'ocr-running' });
+        updatePending(poster.id, { originalDataUri: dataUri });
       } catch (e) {
         updatePending(poster.id, {
           status: 'failed',
@@ -143,7 +145,22 @@ export default function PostersPage() {
         return;
       }
 
+      // If the image is already prepared, skip OCR + redaction entirely
+      if (poster.alreadyPrepared) {
+        updatePending(poster.id, {
+          editedDataUri: dataUri,
+          status: 'ready',
+          rects: [],
+          autoRects: new Set<number>(),
+          ocrWords: [],
+          ocrText: '',
+          ocrError: undefined,
+        });
+        return;
+      }
+
       // 2. Run OCR
+      updatePending(poster.id, { status: 'ocr-running' });
       let words: DetectedText[] = [];
       let fullText = '';
       let ocrError: string | undefined;
@@ -200,6 +217,37 @@ export default function PostersPage() {
     [updatePending]
   );
 
+  /** Toggle the "already prepared" flag and re-process the image accordingly. */
+  const toggleAlreadyPrepared = useCallback(
+    async (poster: PendingPoster, value: boolean) => {
+      if (value) {
+        // Skip OCR + redaction — use the original image as-is
+        updatePending(poster.id, {
+          alreadyPrepared: true,
+          editedDataUri: poster.originalDataUri || null,
+          rects: [],
+          autoRects: new Set<number>(),
+          ocrWords: [],
+          ocrText: '',
+          ocrError: undefined,
+          error: undefined,
+          status: poster.originalDataUri ? 'ready' : 'reading',
+        });
+      } else {
+        // Re-enable OCR + redaction workflow
+        updatePending(poster.id, {
+          alreadyPrepared: false,
+          status: 'reading',
+          editedDataUri: null,
+          rects: [],
+          autoRects: new Set<number>(),
+        });
+        await processPoster({ ...poster, alreadyPrepared: false });
+      }
+    },
+    [updatePending, processPoster]
+  );
+
   const handleFiles = useCallback(
     async (files: FileList | File[]) => {
       const arr = Array.from(files).filter((f) => f.type.startsWith('image/'));
@@ -221,6 +269,7 @@ export default function PostersPage() {
         answer: '',
         points: 250,
         status: 'reading',
+        alreadyPrepared: false,
       }));
       setPending((prev) => [...prev, ...newPosters]);
       setSummary(null);
@@ -495,6 +544,7 @@ export default function PostersPage() {
                 onRemove={removePending}
                 onReapply={reapplyRedactions}
                 onImport={importOne}
+                onTogglePrepared={toggleAlreadyPrepared}
               />
             ))}
           </div>
@@ -583,12 +633,14 @@ function PendingCard({
   onRemove,
   onReapply,
   onImport,
+  onTogglePrepared,
 }: {
   poster: PendingPoster;
   onUpdate: (id: string, patch: Partial<PendingPoster>) => void;
   onRemove: (id: string) => void;
   onReapply: (poster: PendingPoster) => void;
   onImport: (poster: PendingPoster) => Promise<'imported' | 'skipped' | 'failed'>;
+  onTogglePrepared: (poster: PendingPoster, value: boolean) => void;
 }) {
   const isBusy =
     poster.status === 'reading' ||
@@ -626,13 +678,28 @@ function PendingCard({
       </div>
 
       <div className="grid grid-cols-1 gap-4 p-4 md:grid-cols-2">
-        {/* Original + Redaction Editor */}
+        {/* Original + Redaction Editor OR raw preview when already prepared */}
         <div className="flex flex-col gap-2">
           <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-muted-foreground">
             <ScanText className="h-3.5 w-3.5" />
-            Original + Redaction Editor
+            {poster.alreadyPrepared ? 'Original Image (no processing)' : 'Original + Redaction Editor'}
           </div>
-          {poster.originalDataUri ? (
+          {poster.alreadyPrepared ? (
+            <div className="relative aspect-[2/3] w-full overflow-hidden rounded-xl bg-background/60">
+              {poster.originalDataUri ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={poster.originalDataUri}
+                  alt="Original poster"
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              )}
+            </div>
+          ) : poster.originalDataUri ? (
             <>
               <RedactionEditor
                 imageSrc={poster.originalDataUri}
@@ -703,6 +770,29 @@ function PendingCard({
             <p className="truncate text-xs text-muted-foreground" title={poster.file.name}>
               {poster.file.name}
             </p>
+
+            {/* Image already prepared toggle */}
+            <label
+              className={cn(
+                'flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition-all',
+                poster.alreadyPrepared
+                  ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                  : 'border-border/60 bg-background/40 text-muted-foreground hover:border-primary/40',
+                poster.status === 'imported' && 'opacity-60'
+              )}
+            >
+              <input
+                type="checkbox"
+                checked={poster.alreadyPrepared}
+                onChange={(e) => onTogglePrepared(poster, e.target.checked)}
+                disabled={poster.status === 'imported' || isBusy}
+                className="h-4 w-4 rounded border-border accent-emerald-500"
+              />
+              <span>Image already prepared</span>
+              <span className="ml-auto text-[10px] font-normal opacity-70">
+                {poster.alreadyPrepared ? 'Skips OCR & masking' : 'OCR & auto-mask on'}
+              </span>
+            </label>
 
             <div>
               <label className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
