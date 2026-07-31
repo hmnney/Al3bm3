@@ -25,6 +25,7 @@ import {
   Bot,
   Play,
   PackageOpen,
+  ImageDown,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -59,6 +60,7 @@ const NAV: NavItem[] = [
   { href: '/admin/builder', label: 'بناء بنك الأسئلة', icon: Database },
   { href: '/admin/packs', label: 'حزم الأسئلة', icon: PackageOpen },
   { href: '/admin/import', label: 'استيراد ذكي', icon: Sparkles },
+  { href: '/admin/posters', label: 'استيراد البوسترات', icon: ImageDown },
   { href: '/admin/designer', label: 'مصمم الأسئلة', icon: Wand2 },
   { href: '/admin/test', label: 'اختبار اللعبة', icon: Play },
   { href: '/admin/validation', label: 'التحقق من اللعبة', icon: ShieldCheck },
