@@ -1,6 +1,13 @@
 'use client';
 
-import { useCallback, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from 'react';
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+} from 'react';
 import {
   ImagePlus,
   UploadCloud,
@@ -15,6 +22,8 @@ import {
   Tv,
   Sparkles,
   Gamepad2,
+  Eye,
+  ScanText,
 } from 'lucide-react';
 import { useAdmin } from '../_lib/admin-context';
 import { useToast } from '@/hooks/use-toast';
@@ -22,6 +31,17 @@ import { AdminPageHeader } from '../_components/admin-page-header';
 import { cn } from '@/lib/utils';
 import type { AdminQuestion } from '../_lib/types';
 import type { PointValue } from '@/lib/types';
+import {
+  detectText,
+  pickTitleRegions,
+  applyRedactions,
+  suggestAnswer,
+  fileToDataUri,
+  type RedactRect,
+  type DetectedText,
+} from '@/lib/poster-ocr';
+import { uploadPosterImage, type UploadResult } from '@/lib/poster-storage';
+import { RedactionEditor } from '@/components/game/redaction-editor';
 
 type PosterCategory = 'movie-posters' | 'tv-posters' | 'anime-posters' | 'game-posters';
 
@@ -46,18 +66,33 @@ const DIFFICULTY_POINTS: { points: PointValue; label: string }[] = [
   { points: 750, label: '750' },
 ];
 
+type PosterStatus =
+  | 'reading'
+  | 'ocr-running'
+  | 'ocr-done'
+  | 'redacting'
+  | 'ready'
+  | 'imported'
+  | 'skipped'
+  | 'failed';
+
 interface PendingPoster {
   id: string;
   file: File;
-  previewUrl: string;
-  dataUri: string | null;
-  converting: boolean;
+  originalDataUri: string;
+  editedDataUri: string | null;
+  rects: RedactRect[];
+  autoRects: Set<number>;
+  ocrWords: DetectedText[];
+  ocrText: string;
+  ocrError?: string;
   category: PosterCategory;
   answer: string;
   points: PointValue;
-  status: 'pending' | 'imported' | 'skipped' | 'failed';
+  status: PosterStatus;
   error?: string;
   questionId?: string;
+  uploadMethod?: 'storage' | 'data-uri';
 }
 
 type Summary = { imported: number; skipped: number; failed: number } | null;
@@ -66,48 +101,8 @@ function genLocalId(): string {
   return `poster-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-/** Read a File as a compressed data URI (max ~400px wide, JPEG quality 0.8). */
-function fileToCompressedDataUri(file: File, maxDim = 400, quality = 0.8): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Failed to read file'));
-    reader.onload = () => {
-      const img = new window.Image();
-      img.onerror = () => reject(new Error('Failed to decode image'));
-      img.onload = () => {
-        let { width, height } = img;
-        if (width > maxDim || height > maxDim) {
-          if (width >= height) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
-          } else {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
-          }
-        }
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          reject(new Error('Canvas not supported'));
-          return;
-        }
-        ctx.drawImage(img, 0, 0, width, height);
-        try {
-          resolve(canvas.toDataURL('image/jpeg', quality));
-        } catch {
-          reject(new Error('Failed to encode image'));
-        }
-      };
-      img.src = reader.result as string;
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
 export default function PostersPage() {
-  const { data, addQuestion, updateQuestion, deleteQuestion, questionsFor } = useAdmin();
+  const { data, addQuestion, updateQuestion, deleteQuestion } = useAdmin();
   const { toast } = useToast();
 
   const [pending, setPending] = useState<PendingPoster[]>([]);
@@ -125,49 +120,118 @@ export default function PostersPage() {
     return data.questions.filter((q) => ids.has(q.categoryId));
   }, [data.questions]);
 
-  const handleFiles = useCallback(async (files: FileList | File[]) => {
-    const arr = Array.from(files).filter((f) => f.type.startsWith('image/'));
-    if (arr.length === 0) {
-      toast({ title: 'No images found', description: 'Please select image files.', variant: 'destructive' });
-      return;
-    }
+  const updatePending = useCallback((id: string, patch: Partial<PendingPoster>) => {
+    setPending((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  }, []);
 
-    const newPosters: PendingPoster[] = arr.map((file) => ({
-      id: genLocalId(),
-      file,
-      previewUrl: URL.createObjectURL(file),
-      dataUri: null,
-      converting: false,
-      category: 'movie-posters',
-      answer: '',
-      points: 250,
-      status: 'pending',
-    }));
-    setPending((prev) => [...prev, ...newPosters]);
-    setSummary(null);
+  const removePending = useCallback((id: string) => {
+    setPending((prev) => prev.filter((p) => p.id !== id));
+  }, []);
 
-    for (const p of newPosters) {
-      setPending((prev) =>
-        prev.map((x) => (x.id === p.id ? { ...x, converting: true } : x))
-      );
+  const processPoster = useCallback(
+    async (poster: PendingPoster) => {
+      // 1. Read file → data URI
+      let dataUri: string;
       try {
-        const dataUri = await fileToCompressedDataUri(p.file);
-        setPending((prev) =>
-          prev.map((x) =>
-            x.id === p.id ? { ...x, dataUri, converting: false } : x
-          )
-        );
+        dataUri = await fileToDataUri(poster.file);
+        updatePending(poster.id, { originalDataUri: dataUri, status: 'ocr-running' });
       } catch (e) {
-        setPending((prev) =>
-          prev.map((x) =>
-            x.id === p.id
-              ? { ...x, converting: false, status: 'failed', error: e instanceof Error ? e.message : 'Conversion failed' }
-              : x
-          )
-        );
+        updatePending(poster.id, {
+          status: 'failed',
+          error: e instanceof Error ? e.message : 'Failed to read file',
+        });
+        return;
       }
-    }
-  }, [toast]);
+
+      // 2. Run OCR
+      let words: DetectedText[] = [];
+      let fullText = '';
+      let ocrError: string | undefined;
+      try {
+        const ocr = await detectText(dataUri);
+        words = ocr.words;
+        fullText = ocr.fullText;
+      } catch (e) {
+        ocrError = e instanceof Error ? e.message : 'OCR failed';
+      }
+
+      // 3. Auto-detect title regions
+      const img = new Image();
+      img.src = dataUri;
+      await new Promise<void>((resolve) => {
+        img.onload = () => resolve();
+        img.onerror = () => resolve();
+      });
+
+      let rects: RedactRect[] = [];
+      let suggestedAnswer = '';
+      if (words.length > 0) {
+        rects = pickTitleRegions(words, img.naturalWidth, img.naturalHeight);
+        suggestedAnswer = suggestAnswer(words, img.naturalWidth);
+      }
+
+      const autoIdx = new Set(rects.map((_, i) => i));
+
+      updatePending(poster.id, {
+        ocrWords: words,
+        ocrText: fullText,
+        ocrError,
+        rects,
+        autoRects: autoIdx,
+        answer: suggestedAnswer,
+        status: 'ocr-done',
+      });
+
+      // 4. Auto-redact immediately
+      if (rects.length > 0) {
+        try {
+          const edited = await applyRedactions(dataUri, rects);
+          updatePending(poster.id, { editedDataUri: edited, status: 'ready' });
+        } catch (e) {
+          updatePending(poster.id, {
+            status: 'ready',
+            error: 'Auto-redaction failed — draw rectangles manually.',
+          });
+        }
+      } else {
+        updatePending(poster.id, { status: 'ready' });
+      }
+    },
+    [updatePending]
+  );
+
+  const handleFiles = useCallback(
+    async (files: FileList | File[]) => {
+      const arr = Array.from(files).filter((f) => f.type.startsWith('image/'));
+      if (arr.length === 0) {
+        toast({ title: 'No images found', description: 'Please select image files.', variant: 'destructive' });
+        return;
+      }
+
+      const newPosters: PendingPoster[] = arr.map((file) => ({
+        id: genLocalId(),
+        file,
+        originalDataUri: '',
+        editedDataUri: null,
+        rects: [],
+        autoRects: new Set<number>(),
+        ocrWords: [],
+        ocrText: '',
+        category: 'movie-posters',
+        answer: '',
+        points: 250,
+        status: 'reading',
+      }));
+      setPending((prev) => [...prev, ...newPosters]);
+      setSummary(null);
+
+      // Process sequentially so OCR workers don't thrash on bulk upload
+      for (const poster of newPosters) {
+        await processPoster(poster);
+      }
+    },
+    [toast, processPoster]
+  );
 
   const onDrop = useCallback(
     (e: DragEvent<HTMLDivElement>) => {
@@ -190,28 +254,51 @@ export default function PostersPage() {
     [handleFiles]
   );
 
-  const updatePending = useCallback((id: string, patch: Partial<PendingPoster>) => {
-    setPending((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
-  }, []);
-
-  const removePending = useCallback((id: string) => {
-    setPending((prev) => {
-      const target = prev.find((p) => p.id === id);
-      if (target) URL.revokeObjectURL(target.previewUrl);
-      return prev.filter((p) => p.id !== id);
-    });
-  }, []);
+  const reapplyRedactions = useCallback(
+    async (poster: PendingPoster) => {
+      if (poster.rects.length === 0) {
+        updatePending(poster.id, { editedDataUri: poster.originalDataUri });
+        return;
+      }
+      updatePending(poster.id, { status: 'redacting' });
+      try {
+        const edited = await applyRedactions(poster.originalDataUri, poster.rects);
+        updatePending(poster.id, { editedDataUri: edited, status: 'ready' });
+      } catch (e) {
+        updatePending(poster.id, {
+          status: 'ready',
+          error: e instanceof Error ? e.message : 'Redaction failed',
+        });
+      }
+    },
+    [updatePending]
+  );
 
   const importOne = useCallback(
-    (poster: PendingPoster): boolean => {
-      if (!poster.dataUri) {
-        updatePending(poster.id, { status: 'failed', error: 'Image not ready' });
-        return false;
+    async (poster: PendingPoster): Promise<'imported' | 'skipped' | 'failed'> => {
+      if (!poster.editedDataUri) {
+        updatePending(poster.id, { status: 'failed', error: 'Edited image not ready' });
+        return 'failed';
       }
       if (!poster.answer.trim()) {
         updatePending(poster.id, { status: 'skipped', error: 'No answer provided' });
-        return false;
+        return 'skipped';
       }
+
+      updatePending(poster.id, { status: 'redacting' });
+
+      // Upload edited image to Storage (falls back to data URI)
+      let upload: UploadResult;
+      try {
+        upload = await uploadPosterImage(poster.editedDataUri);
+      } catch (e) {
+        updatePending(poster.id, {
+          status: 'failed',
+          error: e instanceof Error ? e.message : 'Upload failed',
+        });
+        return 'failed';
+      }
+
       const meta = POSTER_CATEGORIES.find((c) => c.id === poster.category)!;
       try {
         const q = addQuestion({
@@ -220,32 +307,31 @@ export default function PostersPage() {
           points: poster.points,
           question: meta.question,
           answer: poster.answer.trim(),
-          image: poster.dataUri,
+          image: upload.url,
           video: undefined,
           audio: undefined,
         });
-        updatePending(poster.id, { status: 'imported', questionId: q.id });
-        return true;
+        updatePending(poster.id, {
+          status: 'imported',
+          questionId: q.id,
+          uploadMethod: upload.method,
+        });
+        return 'imported';
       } catch (e) {
         updatePending(poster.id, {
           status: 'failed',
-          error: e instanceof Error ? e.message : 'Unknown error',
+          error: e instanceof Error ? e.message : 'Save failed',
         });
-        return false;
+        return 'failed';
       }
     },
     [addQuestion, updatePending]
   );
 
   const importAll = useCallback(async () => {
-    const ready = pending.filter((p) => p.status === 'pending' && p.dataUri && !p.converting);
-    const converting = pending.some((p) => p.converting);
-    if (converting) {
-      toast({ title: 'Still processing images', description: 'Wait a moment for images to finish converting.', variant: 'destructive' });
-      return;
-    }
+    const ready = pending.filter((p) => p.status === 'ready' && p.editedDataUri);
     if (ready.length === 0) {
-      toast({ title: 'Nothing to import', description: 'Add images and fill in the answer field.', variant: 'destructive' });
+      toast({ title: 'Nothing to import', description: 'Wait for OCR to finish and fill in answers.', variant: 'destructive' });
       return;
     }
 
@@ -255,25 +341,29 @@ export default function PostersPage() {
     let failed = 0;
 
     for (const poster of ready) {
-      const ok = importOne(poster);
-      if (ok) imported++;
-      else if (poster.status === 'skipped') skipped++;
+      if (!poster.answer.trim()) {
+        updatePending(poster.id, { status: 'skipped', error: 'No answer provided' });
+        skipped++;
+        continue;
+      }
+      const result = await importOne(poster);
+      if (result === 'imported') imported++;
+      else if (result === 'skipped') skipped++;
       else failed++;
     }
 
     setSummary({ imported, skipped, failed });
     setImporting(false);
     toast({
-      title: `Import complete`,
+      title: 'Import complete',
       description: `${imported} imported, ${skipped} skipped, ${failed} failed`,
     });
-  }, [pending, importOne, toast]);
+  }, [pending, importOne, updatePending, toast]);
 
   const clearPending = useCallback(() => {
-    pending.forEach((p) => URL.revokeObjectURL(p.previewUrl));
     setPending([]);
     setSummary(null);
-  }, [pending]);
+  }, []);
 
   const startEdit = useCallback((q: AdminQuestion) => {
     setEditingId(q.id);
@@ -306,13 +396,16 @@ export default function PostersPage() {
     [deleteQuestion, toast]
   );
 
-  const pendingCount = pending.filter((p) => p.status === 'pending').length;
+  const pendingCount = pending.filter((p) => p.status === 'ready').length;
+  const processingCount = pending.filter(
+    (p) => p.status === 'reading' || p.status === 'ocr-running' || p.status === 'redacting'
+  ).length;
 
   return (
     <div className="mx-auto max-w-5xl">
       <AdminPageHeader
         title="Poster Import"
-        subtitle="ارفع بوستارات الأفلام والمسلسلات والأنمي والألعاب"
+        subtitle="ارفع البوسترات — يخفي النظام العنوان تلقائيًا قبل الحفظ"
         actions={
           <button
             onClick={() => fileInputRef.current?.click()}
@@ -354,7 +447,7 @@ export default function PostersPage() {
           {dragging ? 'Drop images here' : 'Drag & drop images, or click to browse'}
         </p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Supports bulk upload of hundreds of posters (JPG, PNG, WebP)
+          OCR auto-detects the title and hides it before saving. Bulk upload supported.
         </p>
       </div>
 
@@ -372,7 +465,7 @@ export default function PostersPage() {
         <div className="mb-8">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-lg font-black text-foreground">
-              Pending ({pendingCount} ready)
+              Pending ({pendingCount} ready{processingCount > 0 ? `, ${processingCount} processing` : ''})
             </h2>
             <div className="flex gap-2">
               <button
@@ -393,13 +486,14 @@ export default function PostersPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="flex flex-col gap-6">
             {pending.map((poster) => (
               <PendingCard
                 key={poster.id}
                 poster={poster}
                 onUpdate={updatePending}
                 onRemove={removePending}
+                onReapply={reapplyRedactions}
                 onImport={importOne}
               />
             ))}
@@ -472,21 +566,39 @@ function SummaryCard({
   );
 }
 
+const STATUS_LABELS: Record<PosterStatus, string> = {
+  reading: 'Reading image…',
+  'ocr-running': 'Running OCR…',
+  'ocr-done': 'OCR complete',
+  redacting: 'Applying redactions…',
+  ready: 'Ready to import',
+  imported: 'Imported',
+  skipped: 'Skipped',
+  failed: 'Failed',
+};
+
 function PendingCard({
   poster,
   onUpdate,
   onRemove,
+  onReapply,
   onImport,
 }: {
   poster: PendingPoster;
   onUpdate: (id: string, patch: Partial<PendingPoster>) => void;
   onRemove: (id: string) => void;
-  onImport: (poster: PendingPoster) => boolean;
+  onReapply: (poster: PendingPoster) => void;
+  onImport: (poster: PendingPoster) => Promise<'imported' | 'skipped' | 'failed'>;
 }) {
+  const isBusy =
+    poster.status === 'reading' ||
+    poster.status === 'ocr-running' ||
+    poster.status === 'redacting';
+
   return (
     <div
       className={cn(
-        'flex flex-col overflow-hidden rounded-2xl border-2 bg-card/50 backdrop-blur transition-all',
+        'overflow-hidden rounded-2xl border-2 bg-card/50 backdrop-blur transition-all',
         poster.status === 'imported'
           ? 'border-emerald-500/40'
           : poster.status === 'failed'
@@ -496,116 +608,178 @@ function PendingCard({
           : 'border-border/50'
       )}
     >
-      {/* Preview */}
-      <div className="relative aspect-[2/3] w-full overflow-hidden bg-background/60">
-        {poster.converting ? (
-          <div className="flex h-full items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-          </div>
-        ) : (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={poster.previewUrl}
-            alt={poster.file.name}
-            className="h-full w-full object-cover"
-          />
-        )}
-        {poster.status === 'imported' && (
-          <div className="absolute right-2 top-2 rounded-full bg-emerald-500 p-1 shadow-lg">
-            <CheckCircle2 className="h-4 w-4 text-white" />
-          </div>
-        )}
-        {poster.status === 'failed' && (
-          <div className="absolute right-2 top-2 rounded-full bg-destructive p-1 shadow-lg">
-            <X className="h-4 w-4 text-white" />
-          </div>
-        )}
+      {/* Status bar */}
+      <div className="flex items-center justify-between border-b border-border/40 bg-background/40 px-4 py-2">
+        <div className="flex items-center gap-2">
+          {isBusy && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
+          {poster.status === 'imported' && <CheckCircle2 className="h-4 w-4 text-emerald-500" />}
+          {poster.status === 'failed' && <X className="h-4 w-4 text-destructive" />}
+          {poster.status === 'skipped' && <AlertCircle className="h-4 w-4 text-amber-500" />}
+          <span className="text-xs font-bold text-foreground">{STATUS_LABELS[poster.status]}</span>
+        </div>
         <button
           onClick={() => onRemove(poster.id)}
-          className="absolute left-2 top-2 rounded-full bg-black/50 p-1.5 text-white backdrop-blur transition-all hover:bg-destructive"
+          className="rounded-full p-1 text-muted-foreground transition-all hover:bg-destructive/10 hover:text-destructive"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
 
-      {/* Form */}
-      <div className="flex flex-col gap-2 p-3">
-        <p className="truncate text-xs text-muted-foreground" title={poster.file.name}>
-          {poster.file.name}
-        </p>
-
-        {/* Category */}
-        <div>
-          <label className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
-            Category
-          </label>
-          <select
-            value={poster.category}
-            onChange={(e) => onUpdate(poster.id, { category: e.target.value as PosterCategory })}
-            disabled={poster.status === 'imported'}
-            className="w-full rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-xs font-semibold text-foreground disabled:opacity-60"
-          >
-            {POSTER_CATEGORIES.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Answer */}
-        <div>
-          <label className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
-            Correct Answer
-          </label>
-          <input
-            type="text"
-            value={poster.answer}
-            onChange={(e) => onUpdate(poster.id, { answer: e.target.value })}
-            disabled={poster.status === 'imported'}
-            placeholder="Enter the title…"
-            className="w-full rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-xs font-semibold text-foreground placeholder:text-muted-foreground/50 disabled:opacity-60"
-          />
-        </div>
-
-        {/* Difficulty */}
-        <div>
-          <label className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
-            Difficulty
-          </label>
-          <div className="flex gap-1">
-            {DIFFICULTY_POINTS.map((d) => (
+      <div className="grid grid-cols-1 gap-4 p-4 md:grid-cols-2">
+        {/* Original + Redaction Editor */}
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-muted-foreground">
+            <ScanText className="h-3.5 w-3.5" />
+            Original + Redaction Editor
+          </div>
+          {poster.originalDataUri ? (
+            <>
+              <RedactionEditor
+                imageSrc={poster.originalDataUri}
+                rects={poster.rects}
+                autoRects={poster.autoRects}
+                onChange={(rects) => {
+                  onUpdate(poster.id, { rects, autoRects: new Set() });
+                }}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Red rects = auto-detected by OCR. Click a rect to delete it. Drag to draw a new one.
+              </p>
               <button
-                key={d.points}
-                onClick={() => onUpdate(poster.id, { points: d.points })}
-                disabled={poster.status === 'imported'}
-                className={cn(
-                  'flex-1 rounded-lg border px-2 py-1 text-xs font-black transition-all disabled:opacity-60',
-                  poster.points === d.points
-                    ? 'border-primary bg-primary/15 text-primary'
-                    : 'border-border/60 bg-background/40 text-muted-foreground hover:border-primary/40'
-                )}
+                onClick={() => onReapply(poster)}
+                disabled={isBusy}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border/60 bg-background/40 px-3 py-1.5 text-xs font-semibold text-foreground transition-all hover:border-primary/40 disabled:opacity-50"
               >
-                {d.label}
+                {isBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Pencil className="h-3.5 w-3.5" />}
+                Re-apply Redactions
               </button>
-            ))}
+              {poster.ocrError && (
+                <p className="text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                  OCR failed: {poster.ocrError}. Draw rectangles manually above.
+                </p>
+              )}
+              {!poster.ocrError && poster.ocrText && (
+                <p className="text-[11px] text-muted-foreground">
+                  Detected text: &quot;{poster.ocrText.slice(0, 80)}{poster.ocrText.length > 80 ? '…' : ''}&quot;
+                </p>
+              )}
+            </>
+          ) : (
+            <div className="flex aspect-[2/3] items-center justify-center rounded-xl bg-background/60">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          )}
+        </div>
+
+        {/* Edited preview + Form */}
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-muted-foreground">
+            <Eye className="h-3.5 w-3.5" />
+            Edited Preview (saved)
+          </div>
+          <div className="relative aspect-[2/3] w-full overflow-hidden rounded-xl bg-background/60">
+            {poster.editedDataUri ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={poster.editedDataUri}
+                alt="Edited poster"
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center">
+                {isBusy ? (
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                ) : (
+                  <p className="px-4 text-center text-xs text-muted-foreground">
+                    No redactions applied yet. Draw rectangles on the left to hide the title.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Form */}
+          <div className="flex flex-col gap-2">
+            <p className="truncate text-xs text-muted-foreground" title={poster.file.name}>
+              {poster.file.name}
+            </p>
+
+            <div>
+              <label className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                Category
+              </label>
+              <select
+                value={poster.category}
+                onChange={(e) => onUpdate(poster.id, { category: e.target.value as PosterCategory })}
+                disabled={poster.status === 'imported'}
+                className="w-full rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-xs font-semibold text-foreground disabled:opacity-60"
+              >
+                {POSTER_CATEGORIES.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                Correct Answer
+              </label>
+              <input
+                type="text"
+                value={poster.answer}
+                onChange={(e) => onUpdate(poster.id, { answer: e.target.value })}
+                disabled={poster.status === 'imported'}
+                placeholder="Enter the title…"
+                className="w-full rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-xs font-semibold text-foreground placeholder:text-muted-foreground/50 disabled:opacity-60"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                Difficulty
+              </label>
+              <div className="flex gap-1">
+                {DIFFICULTY_POINTS.map((d) => (
+                  <button
+                    key={d.points}
+                    onClick={() => onUpdate(poster.id, { points: d.points })}
+                    disabled={poster.status === 'imported'}
+                    className={cn(
+                      'flex-1 rounded-lg border px-2 py-1 text-xs font-black transition-all disabled:opacity-60',
+                      poster.points === d.points
+                        ? 'border-primary bg-primary/15 text-primary'
+                        : 'border-border/60 bg-background/40 text-muted-foreground hover:border-primary/40'
+                    )}
+                  >
+                    {d.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {poster.error && poster.status !== 'imported' && (
+              <p className="text-[11px] font-semibold text-destructive">{poster.error}</p>
+            )}
+
+            {poster.status === 'ready' && (
+              <button
+                onClick={() => void onImport(poster)}
+                disabled={!poster.editedDataUri || !poster.answer.trim()}
+                className="mt-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-brand-gradient px-3 py-1.5 text-xs font-bold text-white shadow transition-all hover:opacity-90 disabled:opacity-50"
+              >
+                <Check className="h-3.5 w-3.5" />
+                Import This Poster
+              </button>
+            )}
+            {poster.uploadMethod && poster.status === 'imported' && (
+              <p className="text-[11px] text-muted-foreground">
+                Saved via {poster.uploadMethod === 'storage' ? 'Supabase Storage' : 'database (data URI)'}
+              </p>
+            )}
           </div>
         </div>
-
-        {poster.error && poster.status !== 'imported' && (
-          <p className="text-[11px] font-semibold text-destructive">{poster.error}</p>
-        )}
-
-        {poster.status === 'pending' && (
-          <button
-            onClick={() => onImport(poster)}
-            disabled={poster.converting || !poster.dataUri || !poster.answer.trim()}
-            className="mt-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-brand-gradient px-3 py-1.5 text-xs font-bold text-white shadow transition-all hover:opacity-90 disabled:opacity-50"
-          >
-            <Check className="h-3.5 w-3.5" />
-            Import
-          </button>
-        )}
       </div>
     </div>
   );
