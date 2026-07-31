@@ -24,6 +24,9 @@ import {
   Gamepad2,
   Eye,
   ScanText,
+  Search,
+  EyeOff,
+  Film,
 } from 'lucide-react';
 import { useAdmin } from '../_lib/admin-context';
 import { useToast } from '@/hooks/use-toast';
@@ -42,6 +45,15 @@ import {
 } from '@/lib/poster-ocr';
 import { uploadPosterImage, type UploadResult } from '@/lib/poster-storage';
 import { RedactionEditor } from '@/components/game/redaction-editor';
+import {
+  searchMovies,
+  popularMovies,
+  searchTv,
+  tmdbPosterUrl,
+  downloadPosterAsDataUri,
+  TMDB_CONFIGURED,
+  type TmdbMovie,
+} from '@/lib/tmdb';
 
 type PosterCategory = 'movie-posters' | 'tv-posters' | 'anime-posters' | 'game-posters';
 
@@ -50,14 +62,13 @@ interface PosterCategoryMeta {
   label: string;
   question: string;
   icon: React.ElementType;
-  gradient: string;
 }
 
 const POSTER_CATEGORIES: PosterCategoryMeta[] = [
-  { id: 'movie-posters', label: 'Movie Posters', question: 'What is the name of this movie?', icon: Clapperboard, gradient: 'from-rose-500 to-red-600' },
-  { id: 'tv-posters', label: 'TV Posters', question: 'What is the name of this TV series?', icon: Tv, gradient: 'from-sky-500 to-blue-600' },
-  { id: 'anime-posters', label: 'Anime Posters', question: 'What is the name of this anime?', icon: Sparkles, gradient: 'from-pink-500 to-fuchsia-600' },
-  { id: 'game-posters', label: 'Game Posters', question: 'What is the name of this game?', icon: Gamepad2, gradient: 'from-violet-500 to-purple-600' },
+  { id: 'movie-posters', label: 'Movie Posters', question: 'What is the name of this movie?', icon: Clapperboard },
+  { id: 'tv-posters', label: 'TV Posters', question: 'What is the name of this TV series?', icon: Tv },
+  { id: 'anime-posters', label: 'Anime Posters', question: 'What is the name of this anime?', icon: Sparkles },
+  { id: 'game-posters', label: 'Game Posters', question: 'What is the name of this game?', icon: Gamepad2 },
 ];
 
 const DIFFICULTY_POINTS: { points: PointValue; label: string }[] = [
@@ -65,6 +76,10 @@ const DIFFICULTY_POINTS: { points: PointValue; label: string }[] = [
   { points: 500, label: '500' },
   { points: 750, label: '750' },
 ];
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 type PosterStatus =
   | 'reading'
@@ -93,20 +108,53 @@ interface PendingPoster {
   error?: string;
   questionId?: string;
   uploadMethod?: 'storage' | 'data-uri';
-  /** When true, skip OCR + redaction and use the image as-is. */
   alreadyPrepared: boolean;
 }
 
+type BlindStatus = 'idle' | 'processing' | 'imported' | 'failed';
+
+interface BlindCard {
+  id: string;
+  /** The real TMDB movie — NEVER rendered to the user. */
+  movie: TmdbMovie;
+  label: string;
+  status: BlindStatus;
+  error?: string;
+}
+
 type Summary = { imported: number; skipped: number; failed: number } | null;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function genLocalId(): string {
   return `poster-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function pad3(n: number): string {
+  return n.toString().padStart(3, '0');
+}
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
+
 export default function PostersPage() {
   const { data, addQuestion, updateQuestion, deleteQuestion } = useAdmin();
   const { toast } = useToast();
 
+  // Shared controls
+  const [blindMode, setBlindMode] = useState(false);
+  const [globalCategory, setGlobalCategory] = useState<PosterCategory>('movie-posters');
+  const [globalPoints, setGlobalPoints] = useState<PointValue>(250);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searching, setSearching] = useState(false);
+
+  // Blind mode state
+  const [blindCards, setBlindCards] = useState<BlindCard[]>([]);
+
+  // Upload mode state
   const [pending, setPending] = useState<PendingPoster[]>([]);
   const [dragging, setDragging] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -122,6 +170,130 @@ export default function PostersPage() {
     return data.questions.filter((q) => ids.has(q.categoryId));
   }, [data.questions]);
 
+  // -------------------------------------------------------------------------
+  // Blind mode: TMDB search + import
+  // -------------------------------------------------------------------------
+
+  const runSearch = useCallback(async () => {
+    if (!TMDB_CONFIGURED) {
+      toast({ title: 'تعذر الاتصال بـ TMDB', description: 'API key not configured.', variant: 'destructive' });
+      return;
+    }
+    setSearching(true);
+    setBlindCards([]);
+    try {
+      let results: TmdbMovie[];
+      const isTv = globalCategory === 'tv-posters' || globalCategory === 'anime-posters';
+      if (searchQuery.trim()) {
+        const res = isTv
+          ? await searchTv(searchQuery.trim())
+          : await searchMovies(searchQuery.trim());
+        results = res.results.filter((m) => m.poster_path);
+      } else {
+        const res = await popularMovies();
+        results = res.results.filter((m) => m.poster_path);
+      }
+      const cards: BlindCard[] = results.slice(0, 20).map((movie, i) => ({
+        id: genLocalId(),
+        movie,
+        label: `Movie #${pad3(i + 1)}`,
+        status: 'idle',
+      }));
+      setBlindCards(cards);
+      if (cards.length === 0) {
+        toast({ title: 'No results', description: 'TMDB returned no movies with posters.', variant: 'destructive' });
+      }
+    } catch {
+      toast({ title: 'تعذر الاتصال بـ TMDB', description: 'Search failed.', variant: 'destructive' });
+    } finally {
+      setSearching(false);
+    }
+  }, [globalCategory, searchQuery, toast]);
+
+  const updateBlindCard = useCallback((id: string, patch: Partial<BlindCard>) => {
+    setBlindCards((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  }, []);
+
+  /**
+   * Blind import: runs the entire pipeline internally without ever showing
+   * the poster, title, or OCR output to the user.
+   */
+  const blindImport = useCallback(
+    async (card: BlindCard) => {
+      updateBlindCard(card.id, { status: 'processing' });
+      const meta = POSTER_CATEGORIES.find((c) => c.id === globalCategory)!;
+
+      try {
+        // 1. Download poster from TMDB → data URI
+        const posterDataUri = await downloadPosterAsDataUri(card.movie.poster_path!, 'w500');
+
+        // 2. Run OCR
+        let rects: RedactRect[] = [];
+        try {
+          const ocr = await detectText(posterDataUri);
+          if (ocr.words.length > 0) {
+            const img = new Image();
+            img.src = posterDataUri;
+            await new Promise<void>((resolve) => {
+              img.onload = () => resolve();
+              img.onerror = () => resolve();
+            });
+            rects = pickTitleRegions(ocr.words, img.naturalWidth, img.naturalHeight);
+          }
+        } catch {
+          // OCR failure is non-fatal — we still save with whatever redactions we can
+        }
+
+        // 3. Apply redactions
+        let editedDataUri = posterDataUri;
+        if (rects.length > 0) {
+          try {
+            editedDataUri = await applyRedactions(posterDataUri, rects);
+          } catch {
+            // Use original if redaction fails
+          }
+        }
+
+        // 4. Upload to Supabase Storage
+        const upload = await uploadPosterImage(editedDataUri);
+
+        // 5. Save question with TMDB title as answer
+        addQuestion({
+          categoryId: globalCategory,
+          difficulty: globalPoints === 250 ? 'easy' : globalPoints === 500 ? 'medium' : 'hard',
+          points: globalPoints,
+          question: meta.question,
+          answer: card.movie.title,
+          image: upload.url,
+          video: undefined,
+          audio: undefined,
+        });
+
+        updateBlindCard(card.id, { status: 'imported' });
+      } catch (e) {
+        updateBlindCard(card.id, {
+          status: 'failed',
+          error: e instanceof Error ? e.message : 'Import failed',
+        });
+        toast({ title: 'Import failed', description: e instanceof Error ? e.message : 'Unknown error', variant: 'destructive' });
+      }
+    },
+    [globalCategory, globalPoints, addQuestion, updateBlindCard, toast]
+  );
+
+  const blindImportAll = useCallback(async () => {
+    const idle = blindCards.filter((c) => c.status === 'idle');
+    if (idle.length === 0) return;
+    for (const card of idle) {
+      await blindImport(card);
+    }
+    toast({ title: 'Blind import complete' });
+  }, [blindCards, blindImport, toast]);
+
+  // -------------------------------------------------------------------------
+  // Upload mode: existing drag & drop workflow
+  // -------------------------------------------------------------------------
+
   const updatePending = useCallback((id: string, patch: Partial<PendingPoster>) => {
     setPending((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   }, []);
@@ -132,7 +304,6 @@ export default function PostersPage() {
 
   const processPoster = useCallback(
     async (poster: PendingPoster) => {
-      // 1. Read file → data URI
       let dataUri: string;
       try {
         dataUri = await fileToDataUri(poster.file);
@@ -145,7 +316,6 @@ export default function PostersPage() {
         return;
       }
 
-      // If the image is already prepared, skip OCR + redaction entirely
       if (poster.alreadyPrepared) {
         updatePending(poster.id, {
           editedDataUri: dataUri,
@@ -159,7 +329,6 @@ export default function PostersPage() {
         return;
       }
 
-      // 2. Run OCR
       updatePending(poster.id, { status: 'ocr-running' });
       let words: DetectedText[] = [];
       let fullText = '';
@@ -172,7 +341,6 @@ export default function PostersPage() {
         ocrError = e instanceof Error ? e.message : 'OCR failed';
       }
 
-      // 3. Auto-detect title regions
       const img = new Image();
       img.src = dataUri;
       await new Promise<void>((resolve) => {
@@ -199,12 +367,11 @@ export default function PostersPage() {
         status: 'ocr-done',
       });
 
-      // 4. Auto-redact immediately
       if (rects.length > 0) {
         try {
           const edited = await applyRedactions(dataUri, rects);
           updatePending(poster.id, { editedDataUri: edited, status: 'ready' });
-        } catch (e) {
+        } catch {
           updatePending(poster.id, {
             status: 'ready',
             error: 'Auto-redaction failed — draw rectangles manually.',
@@ -217,11 +384,9 @@ export default function PostersPage() {
     [updatePending]
   );
 
-  /** Toggle the "already prepared" flag and re-process the image accordingly. */
   const toggleAlreadyPrepared = useCallback(
     async (poster: PendingPoster, value: boolean) => {
       if (value) {
-        // Skip OCR + redaction — use the original image as-is
         updatePending(poster.id, {
           alreadyPrepared: true,
           editedDataUri: poster.originalDataUri || null,
@@ -234,7 +399,6 @@ export default function PostersPage() {
           status: poster.originalDataUri ? 'ready' : 'reading',
         });
       } else {
-        // Re-enable OCR + redaction workflow
         updatePending(poster.id, {
           alreadyPrepared: false,
           status: 'reading',
@@ -255,7 +419,6 @@ export default function PostersPage() {
         toast({ title: 'No images found', description: 'Please select image files.', variant: 'destructive' });
         return;
       }
-
       const newPosters: PendingPoster[] = arr.map((file) => ({
         id: genLocalId(),
         file,
@@ -265,39 +428,33 @@ export default function PostersPage() {
         autoRects: new Set<number>(),
         ocrWords: [],
         ocrText: '',
-        category: 'movie-posters',
+        category: globalCategory,
         answer: '',
-        points: 250,
+        points: globalPoints,
         status: 'reading',
         alreadyPrepared: false,
       }));
       setPending((prev) => [...prev, ...newPosters]);
       setSummary(null);
-
-      // Process sequentially so OCR workers don't thrash on bulk upload
       for (const poster of newPosters) {
         await processPoster(poster);
       }
     },
-    [toast, processPoster]
+    [toast, processPoster, globalCategory, globalPoints]
   );
 
   const onDrop = useCallback(
     (e: DragEvent<HTMLDivElement>) => {
       e.preventDefault();
       setDragging(false);
-      if (e.dataTransfer.files.length > 0) {
-        void handleFiles(e.dataTransfer.files);
-      }
+      if (e.dataTransfer.files.length > 0) void handleFiles(e.dataTransfer.files);
     },
     [handleFiles]
   );
 
   const onFileSelect = useCallback(
     (e: ChangeEvent<HTMLInputElement>) => {
-      if (e.target.files && e.target.files.length > 0) {
-        void handleFiles(e.target.files);
-      }
+      if (e.target.files && e.target.files.length > 0) void handleFiles(e.target.files);
       e.target.value = '';
     },
     [handleFiles]
@@ -333,21 +490,14 @@ export default function PostersPage() {
         updatePending(poster.id, { status: 'skipped', error: 'No answer provided' });
         return 'skipped';
       }
-
       updatePending(poster.id, { status: 'redacting' });
-
-      // Upload edited image to Storage (falls back to data URI)
       let upload: UploadResult;
       try {
         upload = await uploadPosterImage(poster.editedDataUri);
       } catch (e) {
-        updatePending(poster.id, {
-          status: 'failed',
-          error: e instanceof Error ? e.message : 'Upload failed',
-        });
+        updatePending(poster.id, { status: 'failed', error: e instanceof Error ? e.message : 'Upload failed' });
         return 'failed';
       }
-
       const meta = POSTER_CATEGORIES.find((c) => c.id === poster.category)!;
       try {
         const q = addQuestion({
@@ -360,17 +510,10 @@ export default function PostersPage() {
           video: undefined,
           audio: undefined,
         });
-        updatePending(poster.id, {
-          status: 'imported',
-          questionId: q.id,
-          uploadMethod: upload.method,
-        });
+        updatePending(poster.id, { status: 'imported', questionId: q.id, uploadMethod: upload.method });
         return 'imported';
       } catch (e) {
-        updatePending(poster.id, {
-          status: 'failed',
-          error: e instanceof Error ? e.message : 'Save failed',
-        });
+        updatePending(poster.id, { status: 'failed', error: e instanceof Error ? e.message : 'Save failed' });
         return 'failed';
       }
     },
@@ -383,12 +526,8 @@ export default function PostersPage() {
       toast({ title: 'Nothing to import', description: 'Wait for OCR to finish and fill in answers.', variant: 'destructive' });
       return;
     }
-
     setImporting(true);
-    let imported = 0;
-    let skipped = 0;
-    let failed = 0;
-
+    let imported = 0, skipped = 0, failed = 0;
     for (const poster of ready) {
       if (!poster.answer.trim()) {
         updatePending(poster.id, { status: 'skipped', error: 'No answer provided' });
@@ -400,13 +539,9 @@ export default function PostersPage() {
       else if (result === 'skipped') skipped++;
       else failed++;
     }
-
     setSummary({ imported, skipped, failed });
     setImporting(false);
-    toast({
-      title: 'Import complete',
-      description: `${imported} imported, ${skipped} skipped, ${failed} failed`,
-    });
+    toast({ title: 'Import complete', description: `${imported} imported, ${skipped} skipped, ${failed} failed` });
   }, [pending, importOne, updatePending, toast]);
 
   const clearPending = useCallback(() => {
@@ -450,144 +585,332 @@ export default function PostersPage() {
     (p) => p.status === 'reading' || p.status === 'ocr-running' || p.status === 'redacting'
   ).length;
 
+  const blindImportedCount = blindCards.filter((c) => c.status === 'imported').length;
+  const blindProcessingCount = blindCards.filter((c) => c.status === 'processing').length;
+  const blindIdleCount = blindCards.filter((c) => c.status === 'idle').length;
+
+  // -------------------------------------------------------------------------
+  // Render
+  // -------------------------------------------------------------------------
+
   return (
     <div className="mx-auto max-w-5xl">
       <AdminPageHeader
         title="Poster Import"
-        subtitle="ارفع البوسترات — يخفي النظام العنوان تلقائيًا قبل الحفظ"
+        subtitle="استيراد البوسترات — الوضع الأعمى يخفي كل شيء"
         actions={
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="inline-flex items-center gap-2 rounded-full bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-lg transition-all hover:opacity-90"
-          >
-            <ImagePlus className="h-4 w-4" />
-            Add Images
-          </button>
+          !blindMode ? (
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="inline-flex items-center gap-2 rounded-full bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-lg transition-all hover:opacity-90"
+            >
+              <ImagePlus className="h-4 w-4" />
+              Add Images
+            </button>
+          ) : undefined
         }
       />
 
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        multiple
-        className="hidden"
-        onChange={onFileSelect}
-      />
-
-      {/* Drop zone */}
-      <div
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={onDrop}
-        className={cn(
-          'mb-6 flex min-h-[140px] cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed p-8 text-center transition-all',
-          dragging
-            ? 'border-primary bg-primary/5'
-            : 'border-border/50 bg-card/30 hover:border-primary/40 hover:bg-card/50'
-        )}
-        onClick={() => fileInputRef.current?.click()}
-      >
-        <UploadCloud className={cn('mb-3 h-10 w-10', dragging ? 'text-primary' : 'text-muted-foreground')} />
-        <p className="text-base font-bold text-foreground">
-          {dragging ? 'Drop images here' : 'Drag & drop images, or click to browse'}
-        </p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          OCR auto-detects the title and hides it before saving. Bulk upload supported.
-        </p>
-      </div>
-
-      {/* Summary */}
-      {summary && (
-        <div className="mb-6 grid grid-cols-3 gap-3">
-          <SummaryCard label="Imported" value={summary.imported} icon={CheckCircle2} tone="success" />
-          <SummaryCard label="Skipped" value={summary.skipped} icon={AlertCircle} tone="warning" />
-          <SummaryCard label="Failed" value={summary.failed} icon={X} tone="error" />
-        </div>
-      )}
-
-      {/* Pending posters */}
-      {pending.length > 0 && (
-        <div className="mb-8">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-black text-foreground">
-              Pending ({pendingCount} ready{processingCount > 0 ? `, ${processingCount} processing` : ''})
-            </h2>
-            <div className="flex gap-2">
+      {/* Shared controls */}
+      <div className="mb-6 rounded-2xl border-2 border-border/40 bg-card/40 p-4 backdrop-blur">
+        <div className="flex flex-col gap-4">
+          {/* Top row: Blind Import switch */}
+          <div className="flex items-center justify-between">
+            <label className="flex cursor-pointer items-center gap-3">
               <button
-                onClick={clearPending}
-                className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card/40 px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-all hover:border-destructive/40 hover:text-destructive"
+                type="button"
+                role="switch"
+                aria-checked={blindMode}
+                onClick={() => {
+                  setBlindMode(!blindMode);
+                  setBlindCards([]);
+                }}
+                className={cn(
+                  'relative h-7 w-12 rounded-full transition-colors',
+                  blindMode ? 'bg-primary' : 'bg-muted'
+                )}
               >
-                <Trash2 className="h-3.5 w-3.5" />
-                Clear
+                <span
+                  className={cn(
+                    'absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-transform',
+                    blindMode ? 'translate-x-6' : 'translate-x-1'
+                  )}
+                />
               </button>
+              <span className="flex items-center gap-2 text-sm font-bold text-foreground">
+                {blindMode ? <EyeOff className="h-4 w-4 text-primary" /> : <Eye className="h-4 w-4 text-muted-foreground" />}
+                Blind Import {blindMode ? 'ON' : 'OFF'}
+              </span>
+            </label>
+            {blindMode && (
+              <span className="text-xs font-semibold text-muted-foreground">
+                {blindImportedCount} imported · {blindProcessingCount} processing · {blindIdleCount} ready
+              </span>
+            )}
+          </div>
+
+          {/* Bottom row: Search + Category + Difficulty */}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            {/* Search */}
+            <div className="flex flex-1 gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void runSearch();
+                  }}
+                  placeholder={blindMode ? 'Search TMDB (results hidden)...' : 'Search TMDB...'}
+                  className="w-full rounded-xl border border-border/60 bg-background/60 py-2 pl-10 pr-4 text-sm font-semibold text-foreground placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none"
+                />
+              </div>
               <button
-                onClick={importAll}
-                disabled={importing || pendingCount === 0}
-                className="inline-flex items-center gap-1.5 rounded-full bg-brand-gradient px-4 py-1.5 text-xs font-bold text-white shadow-lg transition-all hover:opacity-90 disabled:opacity-50"
+                onClick={() => void runSearch()}
+                disabled={searching || !TMDB_CONFIGURED}
+                className="inline-flex items-center gap-2 rounded-xl bg-brand-gradient px-4 py-2 text-sm font-bold text-white shadow-lg transition-all hover:opacity-90 disabled:opacity-50"
               >
-                {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-                Import All ({pendingCount})
+                {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                Search
               </button>
             </div>
-          </div>
 
-          <div className="flex flex-col gap-6">
-            {pending.map((poster) => (
-              <PendingCard
-                key={poster.id}
-                poster={poster}
-                onUpdate={updatePending}
-                onRemove={removePending}
-                onReapply={reapplyRedactions}
-                onImport={importOne}
-                onTogglePrepared={toggleAlreadyPrepared}
-              />
-            ))}
+            {/* Category */}
+            <div>
+              <label className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                Category
+              </label>
+              <select
+                value={globalCategory}
+                onChange={(e) => setGlobalCategory(e.target.value as PosterCategory)}
+                className="rounded-xl border border-border/60 bg-background/60 px-3 py-2 text-sm font-semibold text-foreground"
+              >
+                {POSTER_CATEGORIES.map((c) => (
+                  <option key={c.id} value={c.id}>{c.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Difficulty */}
+            <div>
+              <label className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                Difficulty
+              </label>
+              <div className="flex gap-1">
+                {DIFFICULTY_POINTS.map((d) => (
+                  <button
+                    key={d.points}
+                    onClick={() => setGlobalPoints(d.points)}
+                    className={cn(
+                      'rounded-lg border px-3 py-2 text-sm font-black transition-all',
+                      globalPoints === d.points
+                        ? 'border-primary bg-primary/15 text-primary'
+                        : 'border-border/60 bg-background/40 text-muted-foreground hover:border-primary/40'
+                    )}
+                  >
+                    {d.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
+        </div>
+      </div>
+
+      {!TMDB_CONFIGURED && blindMode && (
+        <div className="mb-4 flex items-center gap-2 rounded-xl border-2 border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-600 dark:text-amber-400">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          TMDB API key not configured. Add NEXT_PUBLIC_TMDB_API_KEY to .env
         </div>
       )}
 
-      {/* Imported posters library */}
-      <div>
-        <h2 className="mb-4 text-lg font-black text-foreground">
-          Imported Posters ({posterQuestions.length})
-        </h2>
-        {posterQuestions.length === 0 ? (
-          <div className="rounded-2xl border-2 border-dashed border-border/50 bg-card/30 p-8 text-center">
-            <ImagePlus className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">
-              No posters imported yet. Upload images above to get started.
+      {/* Hidden file input for upload mode */}
+      {!blindMode && (
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={onFileSelect}
+        />
+      )}
+
+      {/* ============================================================= */}
+      {/* BLIND MODE                                                    */}
+      {/* ============================================================= */}
+      {blindMode ? (
+        <div>
+          {/* Blind cards */}
+          {blindCards.length > 0 && (
+            <>
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-lg font-black text-foreground">
+                  Blind Results ({blindCards.length})
+                </h2>
+                <button
+                  onClick={() => void blindImportAll()}
+                  disabled={blindIdleCount === 0 || blindProcessingCount > 0}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-brand-gradient px-4 py-1.5 text-xs font-bold text-white shadow-lg transition-all hover:opacity-90 disabled:opacity-50"
+                >
+                  <Check className="h-3.5 w-3.5" />
+                  Import All ({blindIdleCount})
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                {blindCards.map((card) => (
+                  <BlindCardItem
+                    key={card.id}
+                    card={card}
+                    onImport={() => void blindImport(card)}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+
+          {searching && blindCards.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-16">
+              <Loader2 className="mb-3 h-8 w-8 animate-spin text-primary" />
+              <p className="text-sm font-semibold text-muted-foreground">Searching TMDB...</p>
+            </div>
+          )}
+
+          {!searching && blindCards.length === 0 && (
+            <div className="rounded-2xl border-2 border-dashed border-border/50 bg-card/30 p-8 text-center">
+              <Film className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                Search TMDB above. Results appear as blind cards — you will never see posters or titles.
+              </p>
+            </div>
+          )}
+        </div>
+      ) : (
+        /* ============================================================= */
+        /* UPLOAD MODE (existing workflow)                                */
+        /* ============================================================= */
+        <div>
+          {/* Drop zone */}
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={onDrop}
+            className={cn(
+              'mb-6 flex min-h-[140px] cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed p-8 text-center transition-all',
+              dragging
+                ? 'border-primary bg-primary/5'
+                : 'border-border/50 bg-card/30 hover:border-primary/40 hover:bg-card/50'
+            )}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <UploadCloud className={cn('mb-3 h-10 w-10', dragging ? 'text-primary' : 'text-muted-foreground')} />
+            <p className="text-base font-bold text-foreground">
+              {dragging ? 'Drop images here' : 'Drag & drop images, or click to browse'}
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              OCR auto-detects the title and hides it before saving. Bulk upload supported.
             </p>
           </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {posterQuestions.map((q) => (
-              <ImportedCard
-                key={q.id}
-                question={q}
-                editing={editingId === q.id}
-                editAnswer={editAnswer}
-                editCategory={editCategory}
-                editPoints={editPoints}
-                onEditStart={startEdit}
-                onEditCancel={() => setEditingId(null)}
-                onEditSave={saveEdit}
-                onDelete={handleDelete}
-                onSetEditAnswer={setEditAnswer}
-                onSetEditCategory={setEditCategory}
-                onSetEditPoints={setEditPoints}
-              />
-            ))}
+
+          {/* Summary */}
+          {summary && (
+            <div className="mb-6 grid grid-cols-3 gap-3">
+              <SummaryCard label="Imported" value={summary.imported} icon={CheckCircle2} tone="success" />
+              <SummaryCard label="Skipped" value={summary.skipped} icon={AlertCircle} tone="warning" />
+              <SummaryCard label="Failed" value={summary.failed} icon={X} tone="error" />
+            </div>
+          )}
+
+          {/* Pending posters */}
+          {pending.length > 0 && (
+            <div className="mb-8">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-lg font-black text-foreground">
+                  Pending ({pendingCount} ready{processingCount > 0 ? `, ${processingCount} processing` : ''})
+                </h2>
+                <div className="flex gap-2">
+                  <button
+                    onClick={clearPending}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card/40 px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-all hover:border-destructive/40 hover:text-destructive"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Clear
+                  </button>
+                  <button
+                    onClick={importAll}
+                    disabled={importing || pendingCount === 0}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-brand-gradient px-4 py-1.5 text-xs font-bold text-white shadow-lg transition-all hover:opacity-90 disabled:opacity-50"
+                  >
+                    {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                    Import All ({pendingCount})
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-6">
+                {pending.map((poster) => (
+                  <PendingCard
+                    key={poster.id}
+                    poster={poster}
+                    onUpdate={updatePending}
+                    onRemove={removePending}
+                    onReapply={reapplyRedactions}
+                    onImport={importOne}
+                    onTogglePrepared={toggleAlreadyPrepared}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Imported posters library */}
+          <div>
+            <h2 className="mb-4 text-lg font-black text-foreground">
+              Imported Posters ({posterQuestions.length})
+            </h2>
+            {posterQuestions.length === 0 ? (
+              <div className="rounded-2xl border-2 border-dashed border-border/50 bg-card/30 p-8 text-center">
+                <ImagePlus className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">
+                  No posters imported yet. Upload images above to get started.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {posterQuestions.map((q) => (
+                  <ImportedCard
+                    key={q.id}
+                    question={q}
+                    editing={editingId === q.id}
+                    editAnswer={editAnswer}
+                    editCategory={editCategory}
+                    editPoints={editPoints}
+                    onEditStart={startEdit}
+                    onEditCancel={() => setEditingId(null)}
+                    onEditSave={saveEdit}
+                    onDelete={handleDelete}
+                    onSetEditAnswer={setEditAnswer}
+                    onSetEditCategory={setEditCategory}
+                    onSetEditPoints={setEditPoints}
+                  />
+                ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
 
 function SummaryCard({
   label,
@@ -613,6 +936,55 @@ function SummaryCard({
         <span className="text-xs font-semibold uppercase tracking-wide">{label}</span>
       </div>
     </div>
+  );
+}
+
+function BlindCardItem({
+  card,
+  onImport,
+}: {
+  card: BlindCard;
+  onImport: () => void;
+}) {
+  return (
+    <button
+      onClick={onImport}
+      disabled={card.status !== 'idle'}
+      className={cn(
+        'flex aspect-[2/3] flex-col items-center justify-center gap-2 rounded-2xl border-2 p-4 text-center transition-all',
+        card.status === 'idle' && 'cursor-pointer border-border/50 bg-card/40 hover:border-primary/40 hover:bg-card/60',
+        card.status === 'processing' && 'border-primary/40 bg-primary/5',
+        card.status === 'imported' && 'border-emerald-500/40 bg-emerald-500/10',
+        card.status === 'failed' && 'border-destructive/40 bg-destructive/5'
+      )}
+    >
+      {card.status === 'idle' && (
+        <>
+          <Film className="h-8 w-8 text-muted-foreground" />
+          <span className="text-sm font-black text-foreground">{card.label}</span>
+          <span className="text-[10px] font-semibold text-muted-foreground">Click to import</span>
+        </>
+      )}
+      {card.status === 'processing' && (
+        <>
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <span className="text-xs font-bold text-primary">Processing...</span>
+        </>
+      )}
+      {card.status === 'imported' && (
+        <>
+          <CheckCircle2 className="h-8 w-8 text-emerald-500" />
+          <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">{card.label}</span>
+          <span className="text-[10px] font-semibold text-emerald-600/70 dark:text-emerald-400/70">Imported</span>
+        </>
+      )}
+      {card.status === 'failed' && (
+        <>
+          <X className="h-8 w-8 text-destructive" />
+          <span className="text-xs font-bold text-destructive">Failed</span>
+        </>
+      )}
+    </button>
   );
 }
 
@@ -660,7 +1032,6 @@ function PendingCard({
           : 'border-border/50'
       )}
     >
-      {/* Status bar */}
       <div className="flex items-center justify-between border-b border-border/40 bg-background/40 px-4 py-2">
         <div className="flex items-center gap-2">
           {isBusy && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
@@ -678,7 +1049,6 @@ function PendingCard({
       </div>
 
       <div className="grid grid-cols-1 gap-4 p-4 md:grid-cols-2">
-        {/* Original + Redaction Editor OR raw preview when already prepared */}
         <div className="flex flex-col gap-2">
           <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-muted-foreground">
             <ScanText className="h-3.5 w-3.5" />
@@ -688,11 +1058,7 @@ function PendingCard({
             <div className="relative aspect-[2/3] w-full overflow-hidden rounded-xl bg-background/60">
               {poster.originalDataUri ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={poster.originalDataUri}
-                  alt="Original poster"
-                  className="h-full w-full object-cover"
-                />
+                <img src={poster.originalDataUri} alt="Original poster" className="h-full w-full object-cover" />
               ) : (
                 <div className="flex h-full items-center justify-center">
                   <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -705,9 +1071,7 @@ function PendingCard({
                 imageSrc={poster.originalDataUri}
                 rects={poster.rects}
                 autoRects={poster.autoRects}
-                onChange={(rects) => {
-                  onUpdate(poster.id, { rects, autoRects: new Set() });
-                }}
+                onChange={(rects) => onUpdate(poster.id, { rects, autoRects: new Set() })}
               />
               <p className="text-[11px] text-muted-foreground">
                 Red rects = auto-detected by OCR. Click a rect to delete it. Drag to draw a new one.
@@ -738,7 +1102,6 @@ function PendingCard({
           )}
         </div>
 
-        {/* Edited preview + Form */}
         <div className="flex flex-col gap-2">
           <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-muted-foreground">
             <Eye className="h-3.5 w-3.5" />
@@ -747,11 +1110,7 @@ function PendingCard({
           <div className="relative aspect-[2/3] w-full overflow-hidden rounded-xl bg-background/60">
             {poster.editedDataUri ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={poster.editedDataUri}
-                alt="Edited poster"
-                className="h-full w-full object-cover"
-              />
+              <img src={poster.editedDataUri} alt="Edited poster" className="h-full w-full object-cover" />
             ) : (
               <div className="flex h-full items-center justify-center">
                 {isBusy ? (
@@ -765,13 +1124,11 @@ function PendingCard({
             )}
           </div>
 
-          {/* Form */}
           <div className="flex flex-col gap-2">
             <p className="truncate text-xs text-muted-foreground" title={poster.file.name}>
               {poster.file.name}
             </p>
 
-            {/* Image already prepared toggle */}
             <label
               className={cn(
                 'flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition-all',
@@ -805,9 +1162,7 @@ function PendingCard({
                 className="w-full rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-xs font-semibold text-foreground disabled:opacity-60"
               >
                 {POSTER_CATEGORIES.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.label}
-                  </option>
+                  <option key={c.id} value={c.id}>{c.label}</option>
                 ))}
               </select>
             </div>
@@ -909,11 +1264,7 @@ function ImportedCard({
       <div className="flex flex-col overflow-hidden rounded-2xl border-2 border-border/50 bg-card/50 backdrop-blur transition-all hover:border-primary/40">
         <div className="relative aspect-[2/3] w-full overflow-hidden bg-background/60">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={question.image || ''}
-            alt={question.answer}
-            className="h-full w-full object-cover"
-          />
+          <img src={question.image || ''} alt={question.answer} className="h-full w-full object-cover" />
           <div className="absolute right-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-black text-white backdrop-blur">
             {question.points}
           </div>
@@ -958,9 +1309,7 @@ function ImportedCard({
           className="w-full rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-xs font-semibold text-foreground"
         >
           {POSTER_CATEGORIES.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.label}
-            </option>
+            <option key={c.id} value={c.id}>{c.label}</option>
           ))}
         </select>
         <input
