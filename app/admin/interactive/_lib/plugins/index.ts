@@ -3,6 +3,7 @@ import { normalPlugin } from './normal';
 import { qrBasePlugin } from './qr';
 import { wordlessPlugin } from './wordless';
 import { wordOnlyPlugin } from './word-only';
+import { qrWordPlugin } from './qr-word';
 import { audioPlugin } from './audio';
 import { videoPlugin } from './video';
 import { privateScreenPlugin } from './private-screen';
@@ -23,6 +24,7 @@ export function registerAllPlugins(): void {
   registerPlugin(qrBasePlugin);
   registerPlugin(wordlessPlugin); // "ولا كلمة" — manual secret word
   registerPlugin(wordOnlyPlugin); // "ولا كلمة" — AI-generated words
+  registerPlugin(qrWordPlugin); // "ولا كلمة" — Excel import + QR generation
   registerPlugin(audioPlugin);
   registerPlugin(videoPlugin);
   registerPlugin(privateScreenPlugin);

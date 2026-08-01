@@ -43,6 +43,12 @@ export interface AdminQuestion {
   tmdb_id?: number;
   /** Media type for TMDB: 'movie' | 'tv'. */
   tmdb_media?: 'movie' | 'tv';
+  /** "normal" = text-only question; "multiple_choice" = shows A/B/C/D options. */
+  questionType?: 'normal' | 'multiple_choice';
+  optionA?: string;
+  optionB?: string;
+  optionC?: string;
+  optionD?: string;
 }
 
 /** The full admin dataset, persisted to localStorage as one blob. */
@@ -63,6 +69,11 @@ export function toAdminQuestion(q: Question): AdminQuestion {
     image: q.image,
     audio: q.audio,
     video: q.video,
+    questionType: q.questionType,
+    optionA: q.optionA,
+    optionB: q.optionB,
+    optionC: q.optionC,
+    optionD: q.optionD,
   };
 }
 

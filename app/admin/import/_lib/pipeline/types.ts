@@ -23,6 +23,11 @@ export interface ImportedRow {
   image: string;
   video: string;
   audio: string;
+  optionA: string;
+  optionB: string;
+  optionC: string;
+  optionD: string;
+  mediaUrl: string;
 }
 
 /** Raw cell matrix from the parser — rows of strings with a separate header row. */
@@ -96,6 +101,11 @@ export interface ColumnMapping {
   image?: number;
   video?: number;
   audio?: number;
+  optionA?: number;
+  optionB?: number;
+  optionC?: number;
+  optionD?: number;
+  mediaUrl?: number;
 }
 
 /** Difficulty label (Arabic + English). */

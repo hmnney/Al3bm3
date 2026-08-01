@@ -10,6 +10,8 @@ export type PointValue = 250 | 500 | 750;
 export type QuestionDifficulty = 'easy' | 'medium' | 'hard';
 
 /** A single banked question belonging to one category. */
+export type QuestionType = 'normal' | 'multiple_choice';
+
 export interface Question {
   /** Stable unique id within its category, e.g. "conan-250-1". */
   id: string;
@@ -21,6 +23,12 @@ export interface Question {
   image?: string;
   audio?: string;
   video?: string;
+  /** "normal" = text-only question; "multiple_choice" = shows A/B/C/D options. */
+  questionType?: QuestionType;
+  optionA?: string;
+  optionB?: string;
+  optionC?: string;
+  optionD?: string;
 }
 
 export type CategoryId =

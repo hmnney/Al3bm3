@@ -25,8 +25,10 @@ import {
   Video as VideoIcon,
   AudioLines,
   RefreshCw,
+  FileDown,
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { downloadFullQuestionTemplate } from '@/lib/excel-import';
 import { useAdmin } from '../_lib/admin-context';
 import { AdminPageHeader } from '../_components/admin-page-header';
 import { Stepper } from './_components/stepper';
@@ -82,7 +84,7 @@ const STEPS = [
 type Step = 0 | 1 | 2 | 3 | 4 | 5;
 
 export default function AdminImportPage() {
-  const { data, addQuestion, addCategory, remoteSaveError, remoteSaveErrorMessage, retryRemoteSync } = useAdmin();
+  const { data, addQuestion, addCategory, updateQuestionByText, remoteSaveError, remoteSaveErrorMessage, retryRemoteSync } = useAdmin();
   const { toast } = useToast();
 
   const [step, setStep] = useState<Step>(0);
@@ -271,6 +273,7 @@ export default function AdminImportPage() {
             return cat.id;
           },
           createQuestion: (q) => addQuestion(q),
+          updateQuestionByText: (text, patch) => updateQuestionByText(text, patch),
           onProgress: (p) => setProgress(p),
         },
         enrichments,
@@ -387,10 +390,20 @@ export default function AdminImportPage() {
             </p>
           </div>
           <UploadZone onFile={handleFile} />
+          <div className="mt-4 flex justify-center">
+            <button
+              type="button"
+              onClick={() => downloadFullQuestionTemplate()}
+              className="inline-flex items-center gap-2 rounded-full border-2 border-primary/40 bg-primary/10 px-5 py-2.5 text-sm font-bold text-primary shadow-lg transition-all hover:bg-primary/20"
+            >
+              <FileDown className="h-4 w-4" />
+              تحميل قالب Excel الكامل
+            </button>
+          </div>
           <div className="mt-6 rounded-xl border border-border/40 bg-background/40 p-4">
             <span className="mb-2 block text-xs font-bold text-muted-foreground">الأعمدة المدعومة (عربي / إنجليزي):</span>
             <div className="flex flex-wrap gap-1.5 text-xs">
-              {['السؤال / Question', 'الإجابة / Answer', 'التصنيف / Category', 'الصعوبة / Difficulty', 'النقاط / Points', 'الصورة / Image', 'الفيديو / Video', 'الصوت / Audio'].map((h) => (
+              {['السؤال / Question', 'الإجابة / Answer', 'التصنيف / Category', 'الصعوبة / Difficulty', 'النقاط / Points', 'الخيارات / Options (A,B,C,D)', 'الصورة / Image', 'الفيديو / Video', 'الصوت / Audio'].map((h) => (
                 <span key={h} className="rounded-md bg-primary/10 px-2 py-1 font-bold text-primary">{h}</span>
               ))}
             </div>
@@ -508,8 +521,14 @@ export default function AdminImportPage() {
                     <TableHead className="text-right text-xs font-bold uppercase text-muted-foreground">النقاط</TableHead>
                     <TableHead className="text-right text-xs font-bold uppercase text-muted-foreground">الثقة %</TableHead>
                     <TableHead className="text-right text-xs font-bold uppercase text-muted-foreground">السؤال</TableHead>
+                    <TableHead className="text-right text-xs font-bold uppercase text-muted-foreground">النوع</TableHead>
+                    <TableHead className="text-right text-xs font-bold uppercase text-muted-foreground">الخيار A</TableHead>
+                    <TableHead className="text-right text-xs font-bold uppercase text-muted-foreground">الخيار B</TableHead>
+                    <TableHead className="text-right text-xs font-bold uppercase text-muted-foreground">الخيار C</TableHead>
+                    <TableHead className="text-right text-xs font-bold uppercase text-muted-foreground">الخيار D</TableHead>
                     <TableHead className="text-right text-xs font-bold uppercase text-muted-foreground">الإجابة</TableHead>
                     <TableHead className="text-center text-xs font-bold uppercase text-muted-foreground">الوسائط</TableHead>
+                    <TableHead className="text-right text-xs font-bold uppercase text-destructive">DEBUG</TableHead>
                     <TableHead className="text-right text-xs font-bold uppercase text-muted-foreground">الحالة</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -554,6 +573,25 @@ export default function AdminImportPage() {
                         <TableCell className="max-w-xs truncate font-semibold text-foreground">
                           {v.row.question || <span className="text-destructive">صف فارغ</span>}
                         </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {v.row.optionA && v.row.optionB && v.row.optionC && v.row.optionD ? (
+                            <span className="rounded-md bg-primary/15 px-1.5 py-0.5 font-bold text-primary">اختيارات (A,B,C,D)</span>
+                          ) : (
+                            <span className="text-muted-foreground">عادي</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="max-w-[10rem] truncate text-xs text-muted-foreground" title={v.row.optionA || ''}>
+                          {v.row.optionA || <span className="text-muted-foreground/50">—</span>}
+                        </TableCell>
+                        <TableCell className="max-w-[10rem] truncate text-xs text-muted-foreground" title={v.row.optionB || ''}>
+                          {v.row.optionB || <span className="text-muted-foreground/50">—</span>}
+                        </TableCell>
+                        <TableCell className="max-w-[10rem] truncate text-xs text-muted-foreground" title={v.row.optionC || ''}>
+                          {v.row.optionC || <span className="text-muted-foreground/50">—</span>}
+                        </TableCell>
+                        <TableCell className="max-w-[10rem] truncate text-xs text-muted-foreground" title={v.row.optionD || ''}>
+                          {v.row.optionD || <span className="text-muted-foreground/50">—</span>}
+                        </TableCell>
                         <TableCell className="max-w-xs truncate text-muted-foreground">
                           {v.row.answer || <span className="text-warning">إجابة مفقودة</span>}
                         </TableCell>
@@ -561,6 +599,9 @@ export default function AdminImportPage() {
                           <MediaPreview image={v.row.image} video={v.row.video} audio={v.row.audio} />
                         </TableCell>
                         <TableCell><RowStatusBadge status={v.status} issues={v.issues} /></TableCell>
+                        <TableCell className="max-w-md truncate text-[10px] font-mono text-destructive" title={JSON.stringify(v.row)}>
+                          {JSON.stringify(v.row)}
+                        </TableCell>
                       </TableRow>
                     );
                   })}

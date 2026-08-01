@@ -37,6 +37,10 @@ interface AdminContextValue {
   // Question CRUD
   addQuestion: (input: Omit<AdminQuestion, 'id'>) => AdminQuestion;
   updateQuestion: (id: string, patch: Partial<AdminQuestion>) => void;
+  updateQuestionByText: (
+    questionText: string,
+    patch: Partial<AdminQuestion>
+  ) => boolean;
   deleteQuestion: (id: string) => void;
   // Maintenance
   resetAll: () => void;
@@ -168,6 +172,26 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     []
   );
 
+  const updateQuestionByText = useCallback(
+    (questionText: string, patch: Partial<AdminQuestion>) => {
+      const normalized = questionText.trim().toLowerCase();
+      let found = false;
+      acceptRemote.current = false;
+      setData((d) => ({
+        ...d,
+        questions: d.questions.map((q) => {
+          if (!found && q.question.trim().toLowerCase() === normalized) {
+            found = true;
+            return { ...q, ...patch };
+          }
+          return q;
+        }),
+      }));
+      return found;
+    },
+    []
+  );
+
   const deleteQuestion = useCallback((id: string) => {
     acceptRemote.current = false;
     setData((d) => ({
@@ -195,6 +219,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       deleteCategory,
       addQuestion,
       updateQuestion,
+      updateQuestionByText,
       deleteQuestion,
       resetAll,
       questionsFor,
@@ -210,6 +235,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       deleteCategory,
       addQuestion,
       updateQuestion,
+      updateQuestionByText,
       deleteQuestion,
       resetAll,
       questionsFor,

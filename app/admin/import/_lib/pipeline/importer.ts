@@ -34,7 +34,30 @@ export interface ImporterCallbacks {
     image?: string;
     audio?: string;
     video?: string;
+    questionType?: 'normal' | 'multiple_choice';
+    optionA?: string;
+    optionB?: string;
+    optionC?: string;
+    optionD?: string;
   }) => void;
+  /** Update an existing question (for duplicate updates). */
+  updateQuestionByText?: (
+    questionText: string,
+    patch: Partial<{
+      categoryId: string;
+      difficulty: 'easy' | 'medium' | 'hard';
+      points: 250 | 500 | 750;
+      answer: string;
+      image?: string;
+      audio?: string;
+      video?: string;
+      questionType?: 'normal' | 'multiple_choice';
+      optionA?: string;
+      optionB?: string;
+      optionC?: string;
+      optionD?: string;
+    }>
+  ) => boolean;
   /** Called on each imported row with current progress. */
   onProgress?: (p: ImportProgress) => void;
 }
@@ -198,20 +221,93 @@ export async function runImport(
         }
       }
 
-      // --- Create question ---
-      console.log(`[Row ${rowNumber}] creating question`);
-      callbacks.createQuestion({
-        categoryId,
-        difficulty: effectiveDifficulty,
-        points: effectivePoints,
-        question: row.question.trim(),
-        answer: row.answer.trim(),
-        image,
-        audio,
-        video,
-      });
+      // --- media_url fallback: route to image/audio/video by extension ---
+      const cleanMediaUrl = row.mediaUrl?.trim() ?? '';
+      if (cleanMediaUrl && !image && !audio && !video) {
+        if (isValidMediaExtension(cleanMediaUrl, 'image')) {
+          image = cleanMediaUrl;
+          importedImages++;
+        } else if (isValidMediaExtension(cleanMediaUrl, 'audio')) {
+          audio = cleanMediaUrl;
+          importedAudio++;
+        } else if (isValidMediaExtension(cleanMediaUrl, 'video')) {
+          video = cleanMediaUrl;
+          importedVideos++;
+        } else {
+          console.warn(`[Row ${rowNumber}] skipped invalid media_url: ${cleanMediaUrl}`);
+          skippedMedia++;
+        }
+      }
 
-      imported++;
+      // --- Detect question type ---
+      const hasOptions =
+        row.optionA.trim() &&
+        row.optionB.trim() &&
+        row.optionC.trim() &&
+        row.optionD.trim();
+      const questionType: 'normal' | 'multiple_choice' = hasOptions
+        ? 'multiple_choice'
+        : 'normal';
+      const optionA = hasOptions ? row.optionA.trim() : undefined;
+      const optionB = hasOptions ? row.optionB.trim() : undefined;
+      const optionC = hasOptions ? row.optionC.trim() : undefined;
+      const optionD = hasOptions ? row.optionD.trim() : undefined;
+
+      // --- Duplicate check: update existing question instead of creating a copy ---
+      const isDuplicate = issues.includes('سؤال مكرر');
+      if (isDuplicate && callbacks.updateQuestionByText) {
+        const updated = callbacks.updateQuestionByText(row.question.trim(), {
+          categoryId,
+          difficulty: effectiveDifficulty,
+          points: effectivePoints,
+          answer: row.answer.trim(),
+          image,
+          audio,
+          video,
+          questionType,
+          optionA,
+          optionB,
+          optionC,
+          optionD,
+        });
+        if (updated) {
+          imported++;
+        } else {
+          callbacks.createQuestion({
+            categoryId,
+            difficulty: effectiveDifficulty,
+            points: effectivePoints,
+            question: row.question.trim(),
+            answer: row.answer.trim(),
+            image,
+            audio,
+            video,
+            questionType,
+            optionA,
+            optionB,
+            optionC,
+            optionD,
+          });
+          imported++;
+        }
+      } else {
+        callbacks.createQuestion({
+          categoryId,
+          difficulty: effectiveDifficulty,
+          points: effectivePoints,
+          question: row.question.trim(),
+          answer: row.answer.trim(),
+          image,
+          audio,
+          video,
+          questionType,
+          optionA,
+          optionB,
+          optionC,
+          optionD,
+        });
+        imported++;
+      }
       console.log(`[Row ${rowNumber}] success — imported ${imported}/${total}`);
 
       const elapsed = (Date.now() - startTime) / 1000;

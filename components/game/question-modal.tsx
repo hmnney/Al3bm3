@@ -1,7 +1,15 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Play, Pause, RotateCcw, Eye, Check, X, Minus } from 'lucide-react';
+import {
+  Play,
+  Pause,
+  RotateCcw,
+  Eye,
+  Check,
+  X,
+  Minus,
+} from 'lucide-react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { cn } from '@/lib/utils';
 import type { ActiveQuestion, Team } from '@/lib/types';
@@ -36,13 +44,6 @@ function formatMMSS(total: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
-/**
- * Fullscreen question modal. The board behind is blurred by a radial overlay.
- * The countdown auto-starts when a question opens and keeps running across
- * pause/resume; closing the modal does NOT reset it — only Reset or a fresh
- * question does. After revealing the answer and picking a result, the parent
- * scores, marks the slot, switches turn, and closes.
- */
 export function QuestionModal({
   question,
   currentTeam,
@@ -73,13 +74,11 @@ export function QuestionModal({
     onResult(question, result);
   };
 
-  // Closing via overlay/escape should not reset the timer; only reset state.
   const handleOpenChange = (next: boolean) => {
     if (!next) onClose();
   };
 
-  const timerColor =
-    timer.seconds <= 10 ? 'text-destructive' : 'text-foreground';
+  const timerColor = timer.seconds <= 10 ? 'text-destructive' : 'text-foreground';
   const timerWarn = timer.seconds <= 10;
 
   return (
@@ -152,7 +151,7 @@ export function QuestionModal({
               </div>
             </div>
 
-            {/* ---- Center: question + answer ---- */}
+            {/* ---- Center: question content ---- */}
             <div className="flex flex-1 flex-col items-center justify-center gap-6 px-5 py-8 text-center sm:px-10">
               {category && (
                 <div className="flex items-center gap-2 rounded-full border border-border/60 bg-background/40 px-4 py-1.5">
@@ -176,9 +175,46 @@ export function QuestionModal({
                 </p>
               </div>
 
-              {/* Media: image / audio / video — each section renders only
-                  when the question carries that media, and is hidden entirely
-                  otherwise. Missing files never crash the modal. */}
+              {/* Multiple Choice Options — render when questionType is set
+                  OR when option fields are present (handles data imported
+                  before questionType was added, or snake_case keys). */}
+              {(() => {
+                const q = question?.question;
+                if (!q) return null;
+                const isMC =
+                  q.questionType === 'multiple_choice' ||
+                  !!(q.optionA || q.optionB || q.optionC || q.optionD);
+                if (!isMC) return null;
+                const opts: [string, string | undefined][] = [
+                  ['A', q.optionA],
+                  ['B', q.optionB],
+                  ['C', q.optionC],
+                  ['D', q.optionD],
+                ];
+                const hasAny = opts.some(([, v]) => v);
+                if (!hasAny) return null;
+                return (
+                  <div className="grid w-full max-w-2xl grid-cols-1 gap-3 sm:grid-cols-2">
+                    {opts.map(([letter, text]) =>
+                      text ? (
+                        <div
+                          key={letter}
+                          className="flex items-center gap-3 rounded-2xl border-2 border-border/60 bg-card/60 px-4 py-3 text-left"
+                        >
+                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-gradient text-sm font-black text-white">
+                            {letter}
+                          </span>
+                          <span className="text-base font-bold text-foreground sm:text-lg">
+                            {text}
+                          </span>
+                        </div>
+                      ) : null
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Media: image / audio / video */}
               {question?.question.image && (
                 <div className="w-full max-w-2xl">
                   <MediaImage
@@ -218,16 +254,34 @@ export function QuestionModal({
                 </GameButton>
               ) : (
                 <div className="flex w-full max-w-3xl flex-col items-center gap-6 animate-scale-in">
-                  <div className="w-full rounded-2xl border-2 border-success/40 bg-success/10 px-6 py-5">
+                  <div className="w-full rounded-2xl border-2 border-success/40 bg-success/10 px-6 py-5 text-center">
                     <p className="text-xs font-bold uppercase tracking-wider text-success">
                       الإجابة
                     </p>
                     <p className="mt-1 text-xl font-bold text-foreground sm:text-2xl">
                       {question?.question.answer}
                     </p>
+                    {(() => {
+                      const q = question?.question;
+                      if (!q) return null;
+                      const opts: [string, string | undefined][] = [
+                        ['A', q.optionA],
+                        ['B', q.optionB],
+                        ['C', q.optionC],
+                        ['D', q.optionD],
+                      ];
+                      const match = opts.find(
+                        ([, v]) =>
+                          v && v.trim().toLowerCase() === q.answer.trim().toLowerCase()
+                      );
+                      return match ? (
+                        <p className="mt-2 text-sm font-bold text-success/80">
+                          الخيار {match[0]}
+                        </p>
+                      ) : null;
+                    })()}
                   </div>
 
-                  {/* Result buttons */}
                   <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3">
                     <ResultButton
                       onClick={() => handleResult('current')}

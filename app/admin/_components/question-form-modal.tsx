@@ -33,6 +33,11 @@ export function QuestionFormModal({
   const [image, setImage] = useState('');
   const [audio, setAudio] = useState('');
   const [video, setVideo] = useState('');
+  const [questionType, setQuestionType] = useState<'normal' | 'multiple_choice'>('normal');
+  const [optionA, setOptionA] = useState('');
+  const [optionB, setOptionB] = useState('');
+  const [optionC, setOptionC] = useState('');
+  const [optionD, setOptionD] = useState('');
 
   useEffect(() => {
     if (question) {
@@ -43,6 +48,21 @@ export function QuestionFormModal({
       setImage(question.image || '');
       setAudio(question.audio || '');
       setVideo(question.video || '');
+      const hasOptionData = !!(
+        question.optionA ||
+        question.optionB ||
+        question.optionC ||
+        question.optionD
+      );
+      setQuestionType(
+        question.questionType === 'multiple_choice' || hasOptionData
+          ? 'multiple_choice'
+          : 'normal'
+      );
+      setOptionA(question.optionA || '');
+      setOptionB(question.optionB || '');
+      setOptionC(question.optionC || '');
+      setOptionD(question.optionD || '');
     } else {
       setCategoryId(defaultCategoryId || categories[0]?.id || '');
       setDifficulty('medium');
@@ -51,6 +71,11 @@ export function QuestionFormModal({
       setImage('');
       setAudio('');
       setVideo('');
+      setQuestionType('normal');
+      setOptionA('');
+      setOptionB('');
+      setOptionC('');
+      setOptionD('');
     }
   }, [question, defaultCategoryId, categories]);
 
@@ -67,6 +92,11 @@ export function QuestionFormModal({
       image: image.trim() || undefined,
       audio: audio.trim() || undefined,
       video: video.trim() || undefined,
+      questionType,
+      optionA: questionType === 'multiple_choice' ? optionA.trim() || undefined : undefined,
+      optionB: questionType === 'multiple_choice' ? optionB.trim() || undefined : undefined,
+      optionC: questionType === 'multiple_choice' ? optionC.trim() || undefined : undefined,
+      optionD: questionType === 'multiple_choice' ? optionD.trim() || undefined : undefined,
     });
   };
 
@@ -131,6 +161,55 @@ export function QuestionFormModal({
               className="w-full rounded-lg border border-input bg-background/60 px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
             />
           </div>
+
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm font-bold text-foreground">نوع السؤال</span>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setQuestionType('normal')}
+                className={`rounded-lg border-2 px-3 py-2 text-sm font-black transition-all ${
+                  questionType === 'normal'
+                    ? 'border-primary bg-primary/15 text-primary'
+                    : 'border-border/50 bg-background/40 text-muted-foreground hover:border-primary/40'
+                }`}
+              >
+                عادي
+              </button>
+              <button
+                type="button"
+                onClick={() => setQuestionType('multiple_choice')}
+                className={`rounded-lg border-2 px-3 py-2 text-sm font-black transition-all ${
+                  questionType === 'multiple_choice'
+                    ? 'border-primary bg-primary/15 text-primary'
+                    : 'border-border/50 bg-background/40 text-muted-foreground hover:border-primary/40'
+                }`}
+              >
+                اختيار من متعدد
+              </button>
+            </div>
+          </div>
+
+          {questionType === 'multiple_choice' && (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {([
+                ['A', optionA, setOptionA],
+                ['B', optionB, setOptionB],
+                ['C', optionC, setOptionC],
+                ['D', optionD, setOptionD],
+              ] as const).map(([letter, val, setter]) => (
+                <div key={letter} className="flex flex-col gap-1.5">
+                  <span className="text-sm font-bold text-foreground">الخيار {letter}</span>
+                  <input
+                    value={val}
+                    onChange={(e) => setter(e.target.value)}
+                    placeholder={`نص الخيار ${letter}`}
+                    className="w-full rounded-lg border border-input bg-background/60 px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
+                  />
+                </div>
+              ))}
+            </div>
+          )}
 
           <div className="flex flex-col gap-1.5">
             <span className="text-sm font-bold text-foreground">الإجابة</span>

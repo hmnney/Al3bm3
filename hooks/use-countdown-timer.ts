@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
-interface CountdownTimer {
+export interface CountdownTimer {
   seconds: number;
   running: boolean;
   start: () => void;

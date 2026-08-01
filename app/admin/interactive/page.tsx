@@ -11,6 +11,7 @@ import {
   X,
   Power,
   Database,
+  FileSpreadsheet,
 } from 'lucide-react';
 import {
   INTERACTION_TYPE_LABELS,
@@ -46,6 +47,7 @@ export default function InteractiveCategoriesPage() {
   const { toast } = useToast();
   const [editing, setEditing] = useState<InteractiveCategory | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [showWordForm, setShowWordForm] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // Keep the selected category fresh from context so dataset edits reflect live.
@@ -79,13 +81,22 @@ export default function InteractiveCategoriesPage() {
         title="التصنيفات التفاعلية"
         subtitle="محرك تفاعلي عام يدعم تصنيفات تفاعلية غير محدودة"
         actions={
-          <button
-            onClick={handleAdd}
-            className="inline-flex items-center gap-2 rounded-full bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-lg transition-all hover:opacity-90"
-          >
-            <Plus className="h-4 w-4" />
-            إضافة تصنيف
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowWordForm(true)}
+              className="inline-flex items-center gap-2 rounded-full border-2 border-primary/40 bg-primary/10 px-4 py-2 text-sm font-semibold text-primary shadow-lg transition-all hover:bg-primary/20"
+            >
+              <FileSpreadsheet className="h-4 w-4" />
+              إنشاء تصنيف كلمات
+            </button>
+            <button
+              onClick={handleAdd}
+              className="inline-flex items-center gap-2 rounded-full bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-lg transition-all hover:opacity-90"
+            >
+              <Plus className="h-4 w-4" />
+              إضافة تصنيف
+            </button>
+          </div>
         }
       />
 
@@ -154,6 +165,32 @@ export default function InteractiveCategoriesPage() {
               toast({ title: 'تمت الإضافة', description: 'أُضيف التصنيف التفاعلي' });
             }
             setShowForm(false);
+          }}
+        />
+      )}
+
+      {showWordForm && (
+        <WordCategoryFormModal
+          onClose={() => setShowWordForm(false)}
+          onSave={(data) => {
+            addCategory({
+              name: data.name,
+              description: 'ولا كلمة — استيراد Excel + QR تلقائي',
+              interactionType: 'qr',
+              pluginId: 'qr-word',
+              config: {
+                singleUse: true,
+                expirationSeconds: 120,
+                connectionTimeoutSeconds: 60,
+              },
+              dataset: { kind: 'qr-word', entries: [], usedWords: [] },
+              enabled: true,
+            });
+            toast({
+              title: 'تم إنشاء التصنيف',
+              description: `أُضيف "${data.name}" — جاهز لاستيراد Excel`,
+            });
+            setShowWordForm(false);
           }}
         />
       )}
@@ -618,4 +655,144 @@ function ConfigField({
     default:
       return null;
   }
+}
+
+// ============================================================
+// Word Category Form — creates a qr-word subcategory
+// ============================================================
+
+const WORD_ICONS = ['🤫', '🎬', '📺', '🎮', '⚽', '🏆', '🎤', '👑', '🎯', '🔥', '⭐', '🎨'] as const;
+const WORD_COLORS = [
+  { name: 'أزرق', value: 'from-blue-500/80 to-blue-700/80' },
+  { name: 'أخضر', value: 'from-emerald-500/80 to-emerald-700/80' },
+  { name: 'أحمر', value: 'from-rose-500/80 to-rose-700/80' },
+  { name: 'برتقالي', value: 'from-amber-500/80 to-orange-700/80' },
+  { name: 'بنفسجي', value: 'from-violet-500/80 to-purple-700/80' },
+  { name: 'سماوي', value: 'from-cyan-500/80 to-teal-700/80' },
+] as const;
+
+function WordCategoryFormModal({
+  onClose,
+  onSave,
+}: {
+  onClose: () => void;
+  onSave: (data: { name: string; icon: string; color: string }) => void;
+}) {
+  const [name, setName] = useState('');
+  const [icon, setIcon] = useState<string>(WORD_ICONS[0]);
+  const [color, setColor] = useState<string>(WORD_COLORS[0].value);
+
+  const handleSave = () => {
+    if (!name.trim()) return;
+    onSave({ name: name.trim(), icon, color });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border-2 border-border/50 bg-card/95 p-6 backdrop-blur-xl scrollbar-thin">
+        <div className="mb-5 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-gradient text-white shadow-lg">
+              <FileSpreadsheet className="h-5 w-5" />
+            </div>
+            <div className="flex flex-col">
+              <h2 className="text-xl font-black text-foreground">إنشاء تصنيف كلمات</h2>
+              <span className="text-xs text-muted-foreground">ولا كلمة — استيراد Excel + QR تلقائي</span>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-2 text-muted-foreground hover:bg-card/80 hover:text-foreground"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="flex flex-col gap-5">
+          {/* Name */}
+          <FormField label="اسم التصنيف">
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="مثال: ولا كلمة - أفلام"
+              className="w-full rounded-lg border border-input bg-background/60 px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
+            />
+          </FormField>
+
+          {/* Icon */}
+          <div>
+            <span className="mb-2 block text-sm font-bold text-foreground">الأيقونة</span>
+            <div className="flex flex-wrap gap-2">
+              {WORD_ICONS.map((ic) => (
+                <button
+                  key={ic}
+                  onClick={() => setIcon(ic)}
+                  className={cn(
+                    'flex h-12 w-12 items-center justify-center rounded-xl border-2 text-2xl transition-all',
+                    icon === ic
+                      ? 'border-primary bg-primary/15 scale-110'
+                      : 'border-border/50 bg-background/40 hover:border-primary/40'
+                  )}
+                >
+                  {ic}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Color */}
+          <div>
+            <span className="mb-2 block text-sm font-bold text-foreground">اللون</span>
+            <div className="flex flex-wrap gap-2">
+              {WORD_COLORS.map((c) => (
+                <button
+                  key={c.value}
+                  onClick={() => setColor(c.value)}
+                  className={cn(
+                    'flex items-center gap-2 rounded-xl border-2 px-4 py-2.5 text-sm font-bold transition-all',
+                    color === c.value
+                      ? 'border-primary scale-105'
+                      : 'border-border/50 hover:border-primary/40'
+                  )}
+                >
+                  <span className={cn('h-6 w-6 rounded-lg bg-gradient-to-br', c.value)} />
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Preview */}
+          <div className="rounded-xl border-2 border-border/40 bg-background/40 p-4">
+            <span className="mb-2 block text-xs font-bold text-muted-foreground">معاينة</span>
+            <div className="flex items-center gap-3">
+              <div className={cn('flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br text-xl text-white shadow-lg', color)}>
+                {icon}
+              </div>
+              <span className="text-lg font-black text-foreground">
+                {name.trim() || 'اسم التصنيف'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="rounded-full border border-border/60 bg-card/40 px-4 py-2 text-sm font-semibold text-muted-foreground transition-all hover:text-foreground"
+          >
+            إلغاء
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={!name.trim()}
+            className="inline-flex items-center gap-2 rounded-full bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-lg transition-all hover:opacity-90 disabled:opacity-40"
+          >
+            <Check className="h-4 w-4" />
+            إنشاء التصنيف
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }

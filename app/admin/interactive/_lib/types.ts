@@ -121,7 +121,19 @@ export type PluginDataset =
   | { kind: 'guess-image'; images: string[]; usedImages: string[] }
   | { kind: 'guess-audio'; audio: string[]; usedAudio: string[] }
   | { kind: 'guess-poster'; posters: string[]; usedPosters: string[] }
-  | { kind: 'guess-celebration'; videos: string[]; usedVideos: string[] };
+  | { kind: 'guess-celebration'; videos: string[]; usedVideos: string[] }
+  | {
+      kind: 'qr-word';
+      entries: QrWordEntry[];
+      usedWords: string[];
+    };
+
+/** A single word entry in a qr-word dataset. */
+export interface QrWordEntry {
+  word: string;
+  points: number;
+  qrUrl: string;
+}
 
 /** The interface every plugin must implement. */
 export interface InteractionPlugin {
@@ -150,5 +162,7 @@ export interface InteractionPlugin {
     category: InteractiveCategory;
     sessionUrl: string;
     onResult: (result: 'current' | 'opponent' | 'none') => void;
+    timerSeconds?: number;
+    largeTimer?: boolean;
   }) => ReactNode;
 }

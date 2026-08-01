@@ -19,6 +19,11 @@ const HEADER_ALIASES: Record<keyof ColumnMapping, string[]> = {
   image: ['image', 'الصورة', 'صورة', 'photo', 'الصوره', 'picture', 'img', 'url'],
   video: ['video', 'الفيديو', 'فيديو', 'clip', 'مقطع'],
   audio: ['audio', 'الصوت', 'صوت', 'voice', 'الصوت'],
+  optionA: ['option_a', 'optiona', 'a', 'الخيار_أ', 'الخيار أ', 'أ'],
+  optionB: ['option_b', 'optionb', 'b', 'الخيار_ب', 'الخيار ب', 'ب'],
+  optionC: ['option_c', 'optionc', 'c', 'الخيار_ج', 'الخيار ج', 'ج'],
+  optionD: ['option_d', 'optiond', 'd', 'الخيار_د', 'الخيار د', 'د'],
+  mediaUrl: ['media_url', 'mediaurl', 'media', 'الوسائط', 'رابط_الوسائط', 'رابط الوسائط'],
 };
 
 /** Detect which column index maps to each known field. */
@@ -77,6 +82,11 @@ export function mapRows(
       image: cell(mapping.image),
       video: cell(mapping.video),
       audio: cell(mapping.audio),
+      optionA: cell(mapping.optionA),
+      optionB: cell(mapping.optionB),
+      optionC: cell(mapping.optionC),
+      optionD: cell(mapping.optionD),
+      mediaUrl: cell(mapping.mediaUrl),
     };
   });
 }

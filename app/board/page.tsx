@@ -157,6 +157,11 @@ export default function BoardPage() {
         image: q.image,
         audio: q.audio,
         video: q.video,
+        questionType: q.questionType,
+        optionA: q.optionA,
+        optionB: q.optionB,
+        optionC: q.optionC,
+        optionD: q.optionD,
       })),
     [adminQuestions]
   );
@@ -775,6 +780,8 @@ function InteractiveGameModal({
               category={category}
               sessionUrl={sessionUrl}
               plugin={plugin}
+              timerSeconds={timerSeconds}
+              largeTimer={largeTimer}
             />
           )}
 
@@ -833,10 +840,14 @@ function QRGameContent({
   category,
   sessionUrl,
   plugin,
+  timerSeconds,
+  largeTimer,
 }: {
   category: InteractiveCategory;
   sessionUrl: string;
   plugin: ReturnType<typeof getPlugin>;
+  timerSeconds: number;
+  largeTimer: boolean;
 }) {
   // If the plugin has a GameplayComponent, render it — same as Test Mode.
   if (plugin?.GameplayComponent && sessionUrl) {
@@ -845,6 +856,8 @@ function QRGameContent({
       <Gameplay
         category={category}
         sessionUrl={sessionUrl}
+        timerSeconds={timerSeconds}
+        largeTimer={largeTimer}
         onResult={() => {
           /* result handled by parent's result buttons */
         }}
