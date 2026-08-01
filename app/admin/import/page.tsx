@@ -534,6 +534,7 @@ export default function AdminImportPage() {
                 </TableHeader>
                 <TableBody>
                   {validated.map((v) => {
+                    console.log('[ReviewTable] v.row =', v.row);
                     const enrichment = enrichmentMap.get(v.row.rowIndex);
                     const effectiveCategory = getEffectiveCategory(v);
                     const match = matchCategory(effectiveCategory, existingCategories);
