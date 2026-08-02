@@ -47,10 +47,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<AllSettings>(loadSettings());
   const [ready, setReady] = useState(false);
 
-  // Race-condition guards: prevent the initial remote load from overwriting
-  // local mutations, and prevent saving defaults to remote before the
-  // initial remote load completes.
-  const acceptRemote = useRef(true);
+  // Guard: prevent saving defaults to remote before the initial remote
+  // load completes. Remote data ALWAYS wins — no exceptions.
   const remoteLoaded = useRef(false);
 
   // Hydrate: localStorage first (instant), then Supabase (durable) on mount.
@@ -59,8 +57,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setSettings(loadSettings());
     setReady(true);
     void loadSettingsRemote().then((result) => {
-      console.log('[settings-context] loadSettingsRemote resolved — status:', result.status, 'acceptRemote:', acceptRemote.current, 'error:', result.error ?? '');
-      if (acceptRemote.current && result.status === 'found' && result.data) {
+      console.log('[settings-context] loadSettingsRemote resolved — status:', result.status, 'error:', result.error ?? '');
+      if (result.status === 'found' && result.data) {
         setSettings(result.data);
       }
       remoteLoaded.current = true;
@@ -101,12 +99,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   }, [settings, ready, doRemoteSave]);
 
   const update = useCallback((patch: Partial<AllSettings>) => {
-    acceptRemote.current = false;
     setSettings((prev) => ({ ...prev, ...patch }));
   }, []);
 
   const resetAll = useCallback(() => {
-    acceptRemote.current = false;
     setSettings(resetSettings());
   }, []);
 

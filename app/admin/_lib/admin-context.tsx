@@ -63,10 +63,8 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   });
   const [ready, setReady] = useState(false);
 
-  // Race-condition guards: prevent the initial remote load from overwriting
-  // local mutations, and prevent saving defaults to remote before the
-  // initial remote load completes.
-  const acceptRemote = useRef(true);
+  // Guard: prevent saving defaults to remote before the initial remote
+  // load completes. Remote data ALWAYS wins — no exceptions.
   const remoteLoaded = useRef(false);
 
   // Hydrate: localStorage first (instant), then Supabase (durable) on mount.
@@ -76,8 +74,8 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     setData(local);
     setReady(true);
     void loadAdminDataRemote().then((result) => {
-      console.log('[admin-context] loadAdminDataRemote resolved — status:', result.status, 'acceptRemote:', acceptRemote.current, 'error:', result.error ?? '');
-      if (acceptRemote.current && result.status === 'found' && result.data) {
+      console.log('[admin-context] loadAdminDataRemote resolved — status:', result.status, 'error:', result.error ?? '');
+      if (result.status === 'found' && result.data) {
         setData(result.data);
       }
       remoteLoaded.current = true;
@@ -126,7 +124,6 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   }, [data, ready, doRemoteSave]);
 
   const addCategory = useCallback((input: Omit<AdminCategory, 'id'>) => {
-    acceptRemote.current = false;
     const cat: AdminCategory = { ...input, id: genId('cat') };
     setData((d) => ({ ...d, categories: [...d.categories, cat] }));
     return cat;
@@ -134,7 +131,6 @@ export function AdminProvider({ children }: { children: ReactNode }) {
 
   const updateCategory = useCallback(
     (id: string, patch: Partial<AdminCategory>) => {
-      acceptRemote.current = false;
       setData((d) => ({
         ...d,
         categories: d.categories.map((c) =>
@@ -146,7 +142,6 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   );
 
   const deleteCategory = useCallback((id: string) => {
-    acceptRemote.current = false;
     setData((d) => ({
       categories: d.categories.filter((c) => c.id !== id),
       questions: d.questions.filter((q) => q.categoryId !== id),
@@ -154,7 +149,6 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const addQuestion = useCallback((input: Omit<AdminQuestion, 'id'>) => {
-    acceptRemote.current = false;
     const q: AdminQuestion = { ...input, id: genId('q') };
     setData((d) => ({ ...d, questions: [...d.questions, q] }));
     return q;
@@ -162,7 +156,6 @@ export function AdminProvider({ children }: { children: ReactNode }) {
 
   const updateQuestion = useCallback(
     (id: string, patch: Partial<AdminQuestion>) => {
-      acceptRemote.current = false;
       setData((d) => ({
         ...d,
         questions: d.questions.map((q) =>
@@ -177,7 +170,6 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     (questionText: string, patch: Partial<AdminQuestion>) => {
       const normalized = questionText.trim().toLowerCase();
       let found = false;
-      acceptRemote.current = false;
       setData((d) => ({
         ...d,
         questions: d.questions.map((q) => {
@@ -194,7 +186,6 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   );
 
   const deleteQuestion = useCallback((id: string) => {
-    acceptRemote.current = false;
     setData((d) => ({
       ...d,
       questions: d.questions.filter((q) => q.id !== id),
@@ -202,7 +193,6 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const resetAll = useCallback(() => {
-    acceptRemote.current = false;
     setData(resetAdminData());
   }, []);
 
