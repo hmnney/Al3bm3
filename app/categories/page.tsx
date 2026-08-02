@@ -52,11 +52,17 @@ export default function CategoriesPage() {
   // appear alongside the static catalog. Without this, imported questions are
   // attached to categories the player can never select.
   useEffect(() => {
-    const local = loadAdminData().categories;
-    setAdminCats(local);
+    const local = loadAdminData();
+    console.log('[categories-page] Loaded from localStorage: Question count =', local.questions.length);
+    setAdminCats(local.categories);
+    console.log('[categories-page] Rendering from Local — Category count =', local.categories.length);
     void loadAdminDataRemote().then((result) => {
       if (result.status === 'found' && result.data) {
+        console.log('[categories-page] Loaded from Supabase: Question count =', result.data.questions.length);
         setAdminCats(result.data.categories);
+        console.log('[categories-page] Rendering from Supabase — Category count =', result.data.categories.length);
+      } else {
+        console.log('[categories-page] Rendering from Local — Category count =', local.categories.length, '(remote status:', result.status + ')');
       }
     });
   }, []);

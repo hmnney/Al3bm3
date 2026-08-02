@@ -69,17 +69,21 @@ export function AdminProvider({ children }: { children: ReactNode }) {
 
   // Hydrate: localStorage first (instant), then Supabase (durable) on mount.
   useEffect(() => {
-    console.log('[admin-context] hydrate START — loading from localStorage cache');
     const local = loadAdminData();
+    console.log('[admin-context] Loaded from localStorage: Question count =', local.questions.length);
     setData(local);
     setReady(true);
+    console.log('[admin-context] Rendering from Local — Question count =', local.questions.length);
     void loadAdminDataRemote().then((result) => {
-      console.log('[admin-context] loadAdminDataRemote resolved — status:', result.status, 'error:', result.error ?? '');
+      console.log('[admin-context] loadAdminDataRemote — status:', result.status, 'error:', result.error ?? '');
       if (result.status === 'found' && result.data) {
+        console.log('[admin-context] Loaded from Supabase: Question count =', result.data.questions.length);
         setData(result.data);
+        console.log('[admin-context] Rendering from Supabase — Question count =', result.data.questions.length);
+      } else {
+        console.log('[admin-context] Rendering from Local — Question count =', local.questions.length, '(remote status:', result.status + ')');
       }
       remoteLoaded.current = true;
-      console.log('[admin-context] remoteLoaded = true');
     });
   }, []);
 

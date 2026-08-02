@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Search, Plus, Pencil, Trash2, X } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAdmin } from '../_lib/admin-context';
@@ -75,6 +75,12 @@ export default function AdminQuestionsPage() {
     setDifficultyFilter('all');
     setMediaFilter('all');
   };
+
+  // Trace which data source this screen is rendering from.
+  useEffect(() => {
+    if (!ready) return;
+    console.log('[questions-page] Rendering — Question count =', data.questions.length);
+  }, [ready, data.questions.length]);
 
   const handleAdd = () => {
     setEditing(null);

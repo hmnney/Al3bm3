@@ -126,10 +126,16 @@ export default function BoardPage() {
 
   useEffect(() => {
     const local = loadAdminData();
+    console.log('[board-page] Loaded from localStorage: Question count =', local.questions.length);
     applyAdminData(local);
+    console.log('[board-page] Rendering from Local — Question count =', local.questions.length);
     void loadAdminDataRemote().then((result) => {
       if (result.status === 'found' && result.data) {
+        console.log('[board-page] Loaded from Supabase: Question count =', result.data.questions.length);
         applyAdminData(result.data);
+        console.log('[board-page] Rendering from Supabase — Question count =', result.data.questions.length);
+      } else {
+        console.log('[board-page] Rendering from Local — Question count =', local.questions.length, '(remote status:', result.status + ')');
       }
     });
   }, [applyAdminData]);
