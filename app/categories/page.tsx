@@ -11,8 +11,7 @@ import { CategoryCard } from '@/components/game/category-card';
 import { useGame } from '@/components/providers/game-provider';
 import { CATEGORIES, REQUIRED_CATEGORY_COUNT } from '@/lib/constants';
 import { categoryImageUrl, preloadImage } from '@/lib/media';
-import { loadAdminData, loadAdminDataRemote } from '@/app/admin/_lib/store';
-import type { AdminCategory } from '@/app/admin/_lib/types';
+import { AdminProvider, useAdmin } from '@/app/admin/_lib/admin-context';
 import {
   loadInteractiveCategories,
   loadInteractiveCategoriesRemote,
@@ -28,13 +27,21 @@ import { CheckCircle2 } from 'lucide-react';
 registerAllPlugins();
 
 export default function CategoriesPage() {
+  return (
+    <AdminProvider>
+      <CategoriesPageInner />
+    </AdminProvider>
+  );
+}
+
+function CategoriesPageInner() {
   const router = useRouter();
   const { state, toggleCategory, clearCategories, startMatch } = useGame();
+  const { data: adminData } = useAdmin();
 
   const [interactiveCats, setInteractiveCats] = useState<InteractiveCategory[]>(
     []
   );
-  const [adminCats, setAdminCats] = useState<AdminCategory[]>([]);
 
   // Load interactive categories from the persisted store (localStorage cache
   // first, then Supabase). The real game shows them alongside the standard
@@ -48,24 +55,9 @@ export default function CategoriesPage() {
     });
   }, []);
 
-  // Load admin-created categories (from import or manual creation) so they
-  // appear alongside the static catalog. Without this, imported questions are
-  // attached to categories the player can never select.
   useEffect(() => {
-    const local = loadAdminData();
-    console.log('[categories-page] Loaded from localStorage: Question count =', local.questions.length);
-    setAdminCats(local.categories);
-    console.log('[categories-page] Rendering from Local — Category count =', local.categories.length);
-    void loadAdminDataRemote().then((result) => {
-      if (result.status === 'found' && result.data) {
-        console.log('[categories-page] Loaded from Supabase: Question count =', result.data.questions.length);
-        setAdminCats(result.data.categories);
-        console.log('[categories-page] Rendering from Supabase — Category count =', result.data.categories.length);
-      } else {
-        console.log('[categories-page] Rendering from Local — Category count =', local.categories.length, '(remote status:', result.status + ')');
-      }
-    });
-  }, []);
+    console.log('[categories-page] Rendering from AdminContext — Category count =', adminData.categories.length);
+  }, [adminData.categories.length]);
 
   // Warm the cache for every category image so selection cards (and the later
   // board) can paint instantly. Fire-and-forget; missing files are harmless.
@@ -82,7 +74,7 @@ export default function CategoriesPage() {
   // Admin-created categories that are NOT in the static catalog — these come
   // from Smart Import or manual creation and must be selectable.
   const staticIds = new Set(CATEGORIES.map((c) => c.id));
-  const customAdminCats = adminCats.filter((c) => !staticIds.has(c.id as CategoryId));
+  const customAdminCats = adminData.categories.filter((c) => !staticIds.has(c.id as CategoryId));
 
   const handleContinue = () => {
     if (selected.length !== REQUIRED_CATEGORY_COUNT) return;

@@ -84,7 +84,7 @@ const STEPS = [
 type Step = 0 | 1 | 2 | 3 | 4 | 5;
 
 export default function AdminImportPage() {
-  const { data, addQuestion, addCategory, updateQuestionByText, remoteSaveError, remoteSaveErrorMessage, retryRemoteSync } = useAdmin();
+  const { data, addQuestion, addCategory, updateQuestionByText, remoteSaveError, remoteSaveErrorMessage, retryRemoteSync, beginBatch, commitBatch } = useAdmin();
   const { toast } = useToast();
 
   const [step, setStep] = useState<Step>(0);
@@ -258,6 +258,7 @@ export default function AdminImportPage() {
     let result: ImportReport | null = null;
     try {
       console.log('[import] before runImport — importable:', importable.length);
+      beginBatch();
       result = await runImport(
         validated,
         resolutions,
@@ -279,6 +280,7 @@ export default function AdminImportPage() {
         enrichments,
         overrides
       );
+      await commitBatch();
       console.log('[import] after runImport — imported:', result.imported, 'skipped:', result.skipped);
     } catch (err) {
       console.error('[import] runImport THREW:', err);

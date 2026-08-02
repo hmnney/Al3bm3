@@ -23,7 +23,7 @@ import { useGame } from '@/components/providers/game-provider';
 import { useCountdownTimer } from '@/hooks/use-countdown-timer';
 import { CATEGORY_MAP, TEAM_COLOR_MAP, POINT_VALUES } from '@/lib/constants';
 import { drawQuestionForSlot } from '@/data';
-import { loadAdminData, loadAdminDataRemote } from '@/app/admin/_lib/store';
+import { AdminProvider, useAdmin } from '@/app/admin/_lib/admin-context';
 import type { AdminQuestion, AdminCategory } from '@/app/admin/_lib/types';
 import { registerAllPlugins } from '@/app/admin/interactive/_lib/plugins';
 import { getPlugin } from '@/app/admin/interactive/_lib/registry';
@@ -61,6 +61,14 @@ import { cn } from '@/lib/utils';
 registerAllPlugins();
 
 export default function BoardPage() {
+  return (
+    <AdminProvider>
+      <BoardPageInner />
+    </AdminProvider>
+  );
+}
+
+function BoardPageInner() {
   const router = useRouter();
   const {
     state,
@@ -110,35 +118,11 @@ export default function BoardPage() {
   // first (instant) then fetch from Supabase Storage (durable source of truth)
   // so that a fresh device with empty localStorage still receives the full
   // question bank imported on another device.
-  const [adminQuestions, setAdminQuestions] = useState<AdminQuestion[]>([]);
-  const [adminCategoriesById, setAdminCategoriesById] = useState<
-    Record<string, AdminCategory>
-  >({});
-
-  const applyAdminData = useCallback((data: { questions: AdminQuestion[]; categories: AdminCategory[] }) => {
-    setAdminQuestions(data.questions);
-    const map: Record<string, AdminCategory> = {};
-    data.categories.forEach((c) => {
-      map[c.id] = c;
-    });
-    setAdminCategoriesById(map);
-  }, []);
+  const { data: adminData, ready: adminReady } = useAdmin();
 
   useEffect(() => {
-    const local = loadAdminData();
-    console.log('[board-page] Loaded from localStorage: Question count =', local.questions.length);
-    applyAdminData(local);
-    console.log('[board-page] Rendering from Local — Question count =', local.questions.length);
-    void loadAdminDataRemote().then((result) => {
-      if (result.status === 'found' && result.data) {
-        console.log('[board-page] Loaded from Supabase: Question count =', result.data.questions.length);
-        applyAdminData(result.data);
-        console.log('[board-page] Rendering from Supabase — Question count =', result.data.questions.length);
-      } else {
-        console.log('[board-page] Rendering from Local — Question count =', local.questions.length, '(remote status:', result.status + ')');
-      }
-    });
-  }, [applyAdminData]);
+    console.log('[board-page] Rendering from AdminContext — Question count =', adminData.questions.length);
+  }, [adminData.questions.length]);
 
   const [activeQuestion, setActiveQuestion] = useState<ActiveQuestion | null>(
     null
@@ -154,7 +138,7 @@ export default function BoardPage() {
   // ONLY from this pool. No static demo bank.
   const questionPool: Question[] = useMemo(
     () =>
-      adminQuestions.map((q: AdminQuestion) => ({
+      adminData.questions.map((q: AdminQuestion) => ({
         id: q.id,
         categoryId: q.categoryId as CategoryId,
         difficulty: q.difficulty,
@@ -170,21 +154,22 @@ export default function BoardPage() {
         optionC: q.optionC,
         optionD: q.optionD,
       })),
-    [adminQuestions]
+    [adminData.questions]
   );
 
-  const hasAnyQuestions = questionPool.length > 0;
+  const hasAnyQuestions = adminReady && questionPool.length > 0;
 
   // Build a combined category lookup that includes admin-created categories
   // (from Smart Import or manual creation) alongside the static catalog.
   // Without this, the board can't render cards for imported categories.
   const combinedCategoryMap = useMemo(() => {
     const map = { ...CATEGORY_MAP };
-    adminQuestions.forEach((q) => {
+    const adminCatMap: Record<string, AdminCategory> = {};
+    adminData.categories.forEach((c) => { adminCatMap[c.id] = c; });
+    adminData.questions.forEach((q) => {
       const cid = q.categoryId;
       if (!map[cid]) {
-        // Find the admin category to build a Category-shaped object.
-        const adminCat = adminCategoriesById[cid];
+        const adminCat = adminCatMap[cid];
         if (adminCat) {
           map[cid] = {
             id: cid as CategoryId,
@@ -197,7 +182,7 @@ export default function BoardPage() {
       }
     });
     return map;
-  }, [adminQuestions, adminCategoriesById]);
+  }, [adminData.questions, adminData.categories]);
 
   // Guard: if no categories were selected, send the user back to setup.
   if (state.selectedCategoryIds.length === 0) {

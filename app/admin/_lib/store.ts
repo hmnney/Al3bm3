@@ -37,17 +37,18 @@ export function loadAdminData(): AdminData {
   return initial;
 }
 
-/** Async load from the app_state table (durable source of truth). */
+/** Async load from the app_state table (durable source of truth).
+ * Returns {status:'notfound'} when the row is absent — never fabricates a
+ * 'found' result from localStorage. Callers decide the fallback.
+ */
 export async function loadAdminDataRemote(): Promise<LoadResult<AdminData>> {
   const result = await getState<AdminData>(REMOTE_KEY);
   if (result.status === 'found' && result.data && result.data.categories && result.data.questions) {
     writeCache(STORAGE_KEY, result.data);
     return result;
   }
-  // notfound or error — return local cache/seed WITHOUT uploading, but
-  // propagate the status so the caller can distinguish the two.
-  console.log('[admin-store] loadAdminDataRemote — no remote data, returning cache. status:', result.status, result.error ?? '');
-  return { status: result.status, data: loadAdminData(), error: result.error };
+  console.log('[admin-store] loadAdminDataRemote — no remote data. status:', result.status, result.error ?? '');
+  return { status: result.status, data: null, error: result.error };
 }
 
 /** Persist to localStorage cache (synchronous). */
@@ -60,11 +61,13 @@ export async function saveAdminDataRemote(data: AdminData): Promise<StorageResul
   return putState(REMOTE_KEY, data);
 }
 
-/** Wipe both stores and reseed the category catalog (questions stay empty). */
+/** Wipe both stores and reseed the category catalog (questions stay empty).
+ * Synchronous helper — the context's resetAll() is the real entry point;
+ * it calls this then syncs to Supabase via saveAdminDataRemote.
+ */
 export function resetAdminData(): AdminData {
   const fresh = seed();
   saveAdminData(fresh);
-  void saveAdminDataRemote(fresh);
   return fresh;
 }
 
