@@ -1,25 +1,27 @@
 import { CATEGORIES } from '@/lib/constants';
-import type { AdminCategory, AdminData } from './types';
+import type { AdminCategory, AdminData, AdminQuestion } from './types';
 import { toAdminCategory } from './types';
 import {
-  getState,
-  putState,
+  deleteRow,
+  listRows,
   readCache,
+  upsertRow,
+  upsertRows,
   writeCache,
   type StorageResult,
   type LoadResult,
 } from '@/lib/state-persistence';
 
 /**
- * Admin data store. The persisted admin question bank (localStorage cache +
- * Supabase Storage) is the ONLY source of questions for the game — there is
- * no static demo fallback. On first run the store seeds only the category
- * catalog (names/glyphs), with an empty question list; the admin then adds or
- * imports questions.
+ * Admin data store. The question bank is persisted as one row per item in
+ * Supabase (admin_questions + admin_categories tables) so that two devices
+ * editing different questions at the same time can never overwrite each
+ * other. localStorage is an offline cache for instant hydration.
  */
 
 const STORAGE_KEY = 'admin-data-v1';
-const REMOTE_KEY = 'admin-data';
+const QUESTIONS_TABLE = 'admin_questions';
+const CATEGORIES_TABLE = 'admin_categories';
 
 /** Build the initial dataset: category catalog, no questions. */
 function seed(): AdminData {
@@ -37,18 +39,26 @@ export function loadAdminData(): AdminData {
   return initial;
 }
 
-/** Async load from the app_state table (durable source of truth).
- * Returns {status:'notfound'} when the row is absent — never fabricates a
- * 'found' result from localStorage. Callers decide the fallback.
- */
+/** Async load from the per-row tables (durable source of truth). Merges both
+ * tables into a single AdminData snapshot. Returns 'notfound' only when both
+ * tables are empty (fresh project). */
 export async function loadAdminDataRemote(): Promise<LoadResult<AdminData>> {
-  const result = await getState<AdminData>(REMOTE_KEY);
-  if (result.status === 'found' && result.data && result.data.categories && result.data.questions) {
-    writeCache(STORAGE_KEY, result.data);
-    return result;
+  const [catRes, qRes] = await Promise.all([
+    listRows<AdminCategory>(CATEGORIES_TABLE),
+    listRows<AdminQuestion>(QUESTIONS_TABLE),
+  ]);
+  if (catRes.status === 'error' || qRes.status === 'error') {
+    return { status: 'error', data: null, error: catRes.error ?? qRes.error };
   }
-  console.log('[admin-store] loadAdminDataRemote — no remote data. status:', result.status, result.error ?? '');
-  return { status: result.status, data: null, error: result.error };
+  const categories = catRes.data ?? [];
+  const questions = qRes.data ?? [];
+  if (categories.length === 0 && questions.length === 0) {
+    return { status: 'notfound', data: null };
+  }
+  const finalCategories = categories.length > 0 ? categories : CATEGORIES.map(toAdminCategory);
+  const data: AdminData = { categories: finalCategories, questions };
+  writeCache(STORAGE_KEY, data);
+  return { status: 'found', data };
 }
 
 /** Persist to localStorage cache (synchronous). */
@@ -56,15 +66,29 @@ export function saveAdminData(data: AdminData): void {
   writeCache(STORAGE_KEY, data);
 }
 
-/** Persist to Supabase Storage (durable). Returns detailed result. */
-export async function saveAdminDataRemote(data: AdminData): Promise<StorageResult> {
-  return putState(REMOTE_KEY, data);
+// ─── Per-row remote operations ──────────────────────────────────────
+
+export async function saveQuestionRemote(question: AdminQuestion): Promise<StorageResult> {
+  return upsertRow(QUESTIONS_TABLE, question);
 }
 
-/** Wipe both stores and reseed the category catalog (questions stay empty).
- * Synchronous helper — the context's resetAll() is the real entry point;
- * it calls this then syncs to Supabase via saveAdminDataRemote.
- */
+export async function saveQuestionsRemote(questions: AdminQuestion[]): Promise<StorageResult> {
+  return upsertRows(QUESTIONS_TABLE, questions);
+}
+
+export async function deleteQuestionRemote(id: string): Promise<StorageResult> {
+  return deleteRow(QUESTIONS_TABLE, id);
+}
+
+export async function saveCategoryRemote(category: AdminCategory): Promise<StorageResult> {
+  return upsertRow(CATEGORIES_TABLE, category);
+}
+
+export async function deleteCategoryRemote(id: string): Promise<StorageResult> {
+  return deleteRow(CATEGORIES_TABLE, id);
+}
+
+/** Wipe both stores and reseed the category catalog (questions stay empty). */
 export function resetAdminData(): AdminData {
   const fresh = seed();
   saveAdminData(fresh);

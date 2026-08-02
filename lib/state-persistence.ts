@@ -131,3 +131,115 @@ export function writeCache<T>(key: string, value: T): void {
     /* ignore quota */
   }
 }
+
+// ─── Per-row table helpers ──────────────────────────────────────────
+// These operate on dedicated tables (admin_questions, admin_categories)
+// where each item is its own row keyed by id. Unlike putState/getState
+// (which store a whole dataset as one blob), these let one device edit a
+// single question without overwriting another device's concurrent edit
+// to a different question.
+
+export async function upsertRow<T extends { id: string }>(
+  table: string,
+  row: T
+): Promise<StorageResult> {
+  console.log('[state-persistence] UPSERT ROW', { table, id: row.id });
+  try {
+    if (!hasSupabaseConfig) {
+      return { ok: false, error: 'Supabase is not configured' };
+    }
+    const { error } = await supabase
+      .from(table)
+      .upsert(
+        { id: row.id, data: row, updated_at: new Date().toISOString() },
+        { onConflict: 'id' }
+      );
+    if (error) {
+      console.error('[state-persistence] UPSERT ROW FAILED', { table, id: row.id, error });
+      return {
+        ok: false,
+        error: `Upsert failed for "${row.id}" on "${table}": ${error.message}`,
+      };
+    }
+    return { ok: true };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: `Exception upserting row "${row.id}" on "${table}": ${msg}` };
+  }
+}
+
+export async function upsertRows<T extends { id: string }>(
+  table: string,
+  rows: T[]
+): Promise<StorageResult> {
+  if (rows.length === 0) return { ok: true };
+  console.log('[state-persistence] UPSERT ROWS', { table, count: rows.length });
+  try {
+    if (!hasSupabaseConfig) {
+      return { ok: false, error: 'Supabase is not configured' };
+    }
+    const now = new Date().toISOString();
+    const payload = rows.map((r) => ({ id: r.id, data: r, updated_at: now }));
+    const { error } = await supabase
+      .from(table)
+      .upsert(payload, { onConflict: 'id' });
+    if (error) {
+      console.error('[state-persistence] UPSERT ROWS FAILED', { table, count: rows.length, error });
+      return {
+        ok: false,
+        error: `Bulk upsert failed on "${table}": ${error.message}`,
+      };
+    }
+    return { ok: true };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: `Exception bulk upserting on "${table}": ${msg}` };
+  }
+}
+
+export async function deleteRow(
+  table: string,
+  id: string
+): Promise<StorageResult> {
+  console.log('[state-persistence] DELETE ROW', { table, id });
+  try {
+    if (!hasSupabaseConfig) {
+      return { ok: false, error: 'Supabase is not configured' };
+    }
+    const { error } = await supabase.from(table).delete().eq('id', id);
+    if (error) {
+      console.error('[state-persistence] DELETE ROW FAILED', { table, id, error });
+      return {
+        ok: false,
+        error: `Delete failed for "${id}" on "${table}": ${error.message}`,
+      };
+    }
+    return { ok: true };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: `Exception deleting row "${id}" on "${table}": ${msg}` };
+  }
+}
+
+export async function listRows<T>(table: string): Promise<LoadResult<T[]>> {
+  console.log('[state-persistence] LIST ROWS', { table });
+  try {
+    if (!hasSupabaseConfig) {
+      return { status: 'error', data: null, error: 'Supabase is not configured' };
+    }
+    const { data, error } = await supabase.from(table).select('data');
+    if (error) {
+      console.error('[state-persistence] LIST ROWS FAILED', { table, error });
+      return {
+        status: 'error',
+        data: null,
+        error: `Select failed on "${table}": ${error.message}`,
+      };
+    }
+    const rows = (data ?? []).map((r) => (r as { data: T }).data);
+    return { status: rows.length > 0 ? 'found' : 'notfound', data: rows };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { status: 'error', data: null, error: `Exception listing rows on "${table}": ${msg}` };
+  }
+}
