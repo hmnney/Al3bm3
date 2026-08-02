@@ -71,26 +71,14 @@ export function AdminProvider({ children }: { children: ReactNode }) {
 
   // Hydrate: localStorage first (instant), then Supabase (durable) on mount.
   useEffect(() => {
-    console.log('[admin-context] hydrate START — loading from localStorage');
+    console.log('[admin-context] hydrate START — loading from localStorage cache');
     const local = loadAdminData();
     setData(local);
     setReady(true);
-    const localQuestionCount = local.questions?.length ?? 0;
     void loadAdminDataRemote().then((result) => {
       console.log('[admin-context] loadAdminDataRemote resolved — status:', result.status, 'acceptRemote:', acceptRemote.current, 'error:', result.error ?? '');
-      const remoteQuestionCount = result.data?.questions?.length ?? 0;
-      if (
-        acceptRemote.current &&
-        result.status === 'found' &&
-        result.data &&
-        remoteQuestionCount >= localQuestionCount
-      ) {
+      if (acceptRemote.current && result.status === 'found' && result.data) {
         setData(result.data);
-      } else if (result.status === 'found' && remoteQuestionCount < localQuestionCount) {
-        console.warn(
-          '[admin-context] skipped remote overwrite — remote has fewer questions than local',
-          { remoteQuestionCount, localQuestionCount }
-        );
       }
       remoteLoaded.current = true;
       console.log('[admin-context] remoteLoaded = true');
