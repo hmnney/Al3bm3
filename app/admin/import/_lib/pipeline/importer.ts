@@ -240,18 +240,16 @@ export async function runImport(
       }
 
       // --- Detect question type ---
-      const hasOptions =
-        row.optionA.trim() &&
-        row.optionB.trim() &&
-        row.optionC.trim() &&
-        row.optionD.trim();
+      const optionsFilledCount = [row.optionA, row.optionB, row.optionC, row.optionD]
+        .filter((o) => o.trim()).length;
+      const hasOptions = optionsFilledCount >= 2;
       const questionType: 'normal' | 'multiple_choice' = hasOptions
         ? 'multiple_choice'
         : 'normal';
-      const optionA = hasOptions ? row.optionA.trim() : undefined;
-      const optionB = hasOptions ? row.optionB.trim() : undefined;
-      const optionC = hasOptions ? row.optionC.trim() : undefined;
-      const optionD = hasOptions ? row.optionD.trim() : undefined;
+      const optionA = row.optionA.trim() ? row.optionA.trim() : undefined;
+      const optionB = row.optionB.trim() ? row.optionB.trim() : undefined;
+      const optionC = row.optionC.trim() ? row.optionC.trim() : undefined;
+      const optionD = row.optionD.trim() ? row.optionD.trim() : undefined;
 
       // --- Duplicate check: update existing question instead of creating a copy ---
       const isDuplicate = issues.includes('سؤال مكرر');

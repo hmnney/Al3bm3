@@ -125,10 +125,20 @@ export default function BoardPage() {
   }, []);
 
   useEffect(() => {
-    applyAdminData(loadAdminData());
+    const local = loadAdminData();
+    applyAdminData(local);
+    const localQuestionCount = local.questions?.length ?? 0;
     void loadAdminDataRemote().then((result) => {
       if (result.status === 'found' && result.data) {
-        applyAdminData(result.data);
+        const remoteQuestionCount = result.data.questions?.length ?? 0;
+        if (remoteQuestionCount >= localQuestionCount) {
+          applyAdminData(result.data);
+        } else {
+          console.warn(
+            '[board] skipped remote overwrite — remote has fewer questions than local',
+            { remoteQuestionCount, localQuestionCount }
+          );
+        }
       }
     });
   }, [applyAdminData]);
