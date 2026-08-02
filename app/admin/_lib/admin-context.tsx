@@ -16,9 +16,7 @@ import {
   deleteCategoryRemote,
   deleteQuestionRemote,
   genId,
-  loadAdminData,
   loadAdminDataRemote,
-  saveAdminData,
   saveCategoryRemote,
   saveQuestionRemote,
   saveQuestionsRemote,
@@ -27,57 +25,47 @@ import { CATEGORIES } from '@/lib/constants';
 import { toAdminCategory } from './types';
 
 /**
- * Admin data context — the SINGLE source of truth for the question bank.
+ * Admin data context — Supabase is the ONLY source of truth.
  *
- * Each question and category is its own row in Supabase (admin_questions,
- * admin_categories). A mutation only touches the ONE row that changed, so
- * two devices editing different questions at the same time can never
- * overwrite each other. Loading fetches all rows from both tables, which is
- * automatically the correct merged picture.
+ * Questions and categories live in normalized database tables (questions,
+ * categories) with real columns — one row per item. There is no localStorage
+ * fallback for the question bank. On mount we fetch everything from Supabase.
  *
- * Startup:
- *   1. Paint instantly from localStorage (so the UI is never blank).
- *   2. Fetch all rows from Supabase.
- *   3. Replace React state + localStorage with the Supabase data.
+ * Each mutation touches only the ONE row that changed:
+ *   - addQuestion    → INSERT one row
+ *   - updateQuestion  → UPDATE one row
+ *   - deleteQuestion  → DELETE one row
+ *   - addCategory     → INSERT one row
+ *   - updateCategory  → UPDATE one row
+ *   - deleteCategory  → DELETE category row + all its question rows
  *
- * Mutations:
- *   a. Update local React state immediately (optimistic UI).
- *   b. Fire the per-row remote call for the ONE item that changed.
- *   c. On error, set remoteSaveError so the UI can surface a retry banner.
+ * Two devices editing different questions at the same time can never
+ * overwrite each other. Loading fetches all rows, which is automatically
+ * the correct merged picture.
+ *
+ * fetchAllQuestions() paginates in 1000-row pages to bypass Supabase's
+ * default row limit, so the app supports 50,000+ questions.
  */
 
 interface AdminContextValue {
   data: AdminData;
   ready: boolean;
   syncing: boolean;
-  // Category CRUD
   addCategory: (input: Omit<AdminCategory, 'id'>) => AdminCategory;
   updateCategory: (id: string, patch: Partial<AdminCategory>) => void;
   deleteCategory: (id: string) => void;
-  // Question CRUD
   addQuestion: (input: Omit<AdminQuestion, 'id'>) => AdminQuestion;
   addQuestionsBulk: (inputs: Omit<AdminQuestion, 'id'>[]) => AdminQuestion[];
   updateQuestion: (id: string, patch: Partial<AdminQuestion>) => void;
-  updateQuestionByText: (
-    questionText: string,
-    patch: Partial<AdminQuestion>
-  ) => boolean;
+  updateQuestionByText: (questionText: string, patch: Partial<AdminQuestion>) => boolean;
   deleteQuestion: (id: string) => void;
-  /** Replace the entire dataset (used by AI generator). */
   replaceAll: (next: AdminData) => void;
-  // Maintenance
   resetAll: () => void;
-  /** Questions belonging to a category, derived. */
   questionsFor: (categoryId: string) => AdminQuestion[];
-  /** True when the last remote (Supabase) save failed. */
   remoteSaveError: boolean;
-  /** Human-readable error message from the last remote save attempt. */
   remoteSaveErrorMessage: string | null;
-  /** Manually retry the cloud sync with current data. */
   retryRemoteSync: () => Promise<StorageResult>;
-  /** Begin a batch — mutations update state but defer the remote sync. */
   beginBatch: () => void;
-  /** Commit the batch — push buffered rows then re-fetch. */
   commitBatch: () => Promise<StorageResult>;
 }
 
@@ -89,42 +77,34 @@ function seed(): AdminData {
 }
 
 export function AdminProvider({ children }: { children: ReactNode }) {
-  const [data, setData] = useState<AdminData>({
-    categories: [],
-    questions: [],
-  });
+  const [data, setData] = useState<AdminData>({ categories: [], questions: [] });
   const [ready, setReady] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [remoteSaveError, setRemoteSaveError] = useState(false);
   const [remoteSaveErrorMessage, setRemoteSaveErrorMessage] = useState<string | null>(null);
 
   const dataRef = useRef(data);
-  useEffect(() => {
-    dataRef.current = data;
-  }, [data]);
+  useEffect(() => { dataRef.current = data; }, [data]);
 
-  // ─── Startup: localStorage (instant) → Supabase (truth) ──────────────
+  // ─── Startup: fetch from Supabase (the only source of truth) ─────────
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const local = loadAdminData();
-      if (!cancelled) {
-        setData(local);
-        setReady(true);
-      }
       const result = await loadAdminDataRemote();
       if (cancelled) return;
       if (result.status === 'found' && result.data) {
         setData(result.data);
         dataRef.current = result.data;
+      } else if (result.status === 'notfound') {
+        const fresh = seed();
+        setData(fresh);
+        dataRef.current = fresh;
       }
+      setReady(true);
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
-  // ─── Remote error helper ─────────────────────────────────────────────
   const handleRemoteError = useCallback((result: StorageResult) => {
     if (!result.ok) {
       setRemoteSaveError(true);
@@ -136,9 +116,6 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // ─── Batching (Excel import) ─────────────────────────────────────────
-  // While batching is active, addQuestion/addQuestionsBulk buffer their new
-  // rows in a ref instead of saving one-by-one. commitBatch() flushes them in
-  // a single upsert, then re-fetches to refresh local state.
   const batchingRef = useRef(false);
   const batchedQuestionsRef = useRef<AdminQuestion[]>([]);
   const batchedCategoriesRef = useRef<AdminCategory[]>([]);
@@ -158,11 +135,9 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     batchedCategoriesRef.current = [];
 
     const results: StorageResult[] = [];
-    // Save categories one by one (usually just 1-3 new categories per import).
     for (const cat of cats) {
       results.push(await saveCategoryRemote(cat));
     }
-    // Save all questions in one bulk upsert.
     if (qs.length > 0) results.push(await saveQuestionsRemote(qs));
 
     const failed = results.find((r) => !r.ok);
@@ -172,7 +147,6 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       return failed;
     }
 
-    // Re-fetch to refresh local state with the merged picture.
     const loadRes = await loadAdminDataRemote();
     if (loadRes.status === 'found' && loadRes.data) {
       setData(loadRes.data);
@@ -185,9 +159,6 @@ export function AdminProvider({ children }: { children: ReactNode }) {
   }, [handleRemoteError]);
 
   // ─── retryRemoteSync ─────────────────────────────────────────────────
-  // Re-saves all current data (used by the import page's retry button when a
-  // previous save failed). For the per-row model this means re-upserting all
-  // categories and questions, which is safe because upsert is idempotent.
   const retryRemoteSync = useCallback(async (): Promise<StorageResult> => {
     setSyncing(true);
     const current = dataRef.current;
@@ -197,7 +168,6 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       setSyncing(false);
       return qRes;
     }
-    // Categories saved one-by-one (small count).
     for (const cat of current.categories) {
       const r = await saveCategoryRemote(cat);
       if (!r.ok) {
@@ -217,7 +187,6 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     return { ok: true };
   }, [handleRemoteError]);
 
-  // ─── Local state updater (optimistic) ─────────────────────────────────
   const updateLocal = useCallback((producer: (current: AdminData) => AdminData) => {
     const next = producer(dataRef.current);
     setData(next);
@@ -245,10 +214,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       updateLocal((d) => ({
         ...d,
         categories: d.categories.map((c) => {
-          if (c.id === id) {
-            updated = { ...c, ...patch };
-            return updated;
-          }
+          if (c.id === id) { updated = { ...c, ...patch }; return updated; }
           return c;
         }),
       }));
@@ -267,10 +233,6 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       }));
       if (!batchingRef.current) {
         void deleteCategoryRemote(id).then(handleRemoteError);
-        // Also delete orphaned questions on the remote.
-        dataRef.current.questions
-          .filter((q) => q.categoryId === id)
-          .forEach((q) => void deleteQuestionRemote(q.id));
       }
     },
     [updateLocal, handleRemoteError]
@@ -293,10 +255,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
 
   const addQuestionsBulk = useCallback(
     (inputs: Omit<AdminQuestion, 'id'>[]) => {
-      const newQs: AdminQuestion[] = inputs.map((input) => ({
-        ...input,
-        id: genId('q'),
-      }));
+      const newQs: AdminQuestion[] = inputs.map((input) => ({ ...input, id: genId('q') }));
       updateLocal((d) => ({ ...d, questions: [...d.questions, ...newQs] }));
       if (batchingRef.current) {
         batchedQuestionsRef.current.push(...newQs);
@@ -314,10 +273,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       updateLocal((d) => ({
         ...d,
         questions: d.questions.map((q) => {
-          if (q.id === id) {
-            updated = { ...q, ...patch };
-            return updated;
-          }
+          if (q.id === id) { updated = { ...q, ...patch }; return updated; }
           return q;
         }),
       }));
@@ -354,10 +310,7 @@ export function AdminProvider({ children }: { children: ReactNode }) {
 
   const deleteQuestion = useCallback(
     (id: string) => {
-      updateLocal((d) => ({
-        ...d,
-        questions: d.questions.filter((q) => q.id !== id),
-      }));
+      updateLocal((d) => ({ ...d, questions: d.questions.filter((q) => q.id !== id) }));
       if (!batchingRef.current) {
         void deleteQuestionRemote(id).then(handleRemoteError);
       }
@@ -371,7 +324,6 @@ export function AdminProvider({ children }: { children: ReactNode }) {
       if (!batchingRef.current) {
         setSyncing(true);
         void (async () => {
-          // For replaceAll, save all items to per-row tables.
           const catResults: StorageResult[] = [];
           for (const cat of next.categories) {
             catResults.push(await saveCategoryRemote(cat));
@@ -402,7 +354,6 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     if (!batchingRef.current) {
       setSyncing(true);
       void (async () => {
-        // Delete all existing rows, then save the seed categories.
         const current = dataRef.current;
         for (const q of current.questions) {
           await deleteQuestionRemote(q.id);
@@ -417,8 +368,6 @@ export function AdminProvider({ children }: { children: ReactNode }) {
         if (loadRes.status === 'found' && loadRes.data) {
           setData(loadRes.data);
           dataRef.current = loadRes.data;
-        } else {
-          saveAdminData(fresh);
         }
         setRemoteSaveError(false);
         setRemoteSaveErrorMessage(null);
@@ -434,52 +383,24 @@ export function AdminProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<AdminContextValue>(
     () => ({
-      data,
-      ready,
-      syncing,
-      addCategory,
-      updateCategory,
-      deleteCategory,
-      addQuestion,
-      addQuestionsBulk,
-      updateQuestion,
-      updateQuestionByText,
-      deleteQuestion,
-      replaceAll,
-      resetAll,
-      questionsFor,
-      remoteSaveError,
-      remoteSaveErrorMessage,
-      retryRemoteSync,
-      beginBatch,
-      commitBatch,
+      data, ready, syncing,
+      addCategory, updateCategory, deleteCategory,
+      addQuestion, addQuestionsBulk, updateQuestion, updateQuestionByText, deleteQuestion,
+      replaceAll, resetAll, questionsFor,
+      remoteSaveError, remoteSaveErrorMessage, retryRemoteSync,
+      beginBatch, commitBatch,
     }),
     [
-      data,
-      ready,
-      syncing,
-      addCategory,
-      updateCategory,
-      deleteCategory,
-      addQuestion,
-      addQuestionsBulk,
-      updateQuestion,
-      updateQuestionByText,
-      deleteQuestion,
-      replaceAll,
-      resetAll,
-      questionsFor,
-      remoteSaveError,
-      remoteSaveErrorMessage,
-      retryRemoteSync,
-      beginBatch,
-      commitBatch,
+      data, ready, syncing,
+      addCategory, updateCategory, deleteCategory,
+      addQuestion, addQuestionsBulk, updateQuestion, updateQuestionByText, deleteQuestion,
+      replaceAll, resetAll, questionsFor,
+      remoteSaveError, remoteSaveErrorMessage, retryRemoteSync,
+      beginBatch, commitBatch,
     ]
   );
 
-  return (
-    <AdminContext.Provider value={value}>{children}</AdminContext.Provider>
-  );
+  return <AdminContext.Provider value={value}>{children}</AdminContext.Provider>;
 }
 
 export function useAdmin(): AdminContextValue {
