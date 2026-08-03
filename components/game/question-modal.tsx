@@ -55,12 +55,14 @@ export function QuestionModal({
 }: QuestionModalProps) {
   const open = question !== null;
   const [revealed, setRevealed] = useState(false);
+  const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const timer = useCountdownTimer(timerSeconds);
 
   // Auto-start the timer whenever a new question opens, and reset reveal state.
   useEffect(() => {
     if (open) {
       setRevealed(false);
+      setSelectedOption(null);
       timer.startFresh();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -68,6 +70,35 @@ export function QuestionModal({
 
   const category = question ? CATEGORY_MAP[question.question.categoryId] : null;
   const currentColor = TEAM_COLOR_MAP[currentTeam.colorId];
+
+  // Detect Multiple Choice and pre-compute option data + correct letter.
+  const mcData = (() => {
+    const q = question?.question;
+    if (!q) return null;
+    const isMC =
+      q.questionType === 'multiple_choice' ||
+      !!(q.optionA || q.optionB || q.optionC || q.optionD);
+    if (!isMC) return null;
+    const opts: [string, string | undefined][] = [
+      ['A', q.optionA],
+      ['B', q.optionB],
+      ['C', q.optionC],
+      ['D', q.optionD],
+    ];
+    const hasAny = opts.some(([, v]) => v);
+    if (!hasAny) return null;
+    const correctLetter = opts.find(
+      ([, v]) => v && v.trim().toLowerCase() === q.answer.trim().toLowerCase()
+    )?.[0];
+    return { opts, correctLetter };
+  })();
+  const isMC = mcData !== null;
+
+  const handleOptionClick = (letter: string) => {
+    if (revealed) return;
+    setSelectedOption(letter);
+    setRevealed(true);
+  };
 
   const handleResult = (result: 'current' | 'opponent' | 'none') => {
     if (!question) return;
@@ -93,7 +124,7 @@ export function QuestionModal({
         >
           <div className="mx-auto flex h-full w-full max-w-5xl flex-col overflow-hidden rounded-3xl border-2 bg-card/90 backdrop-blur-xl">
             {/* ---- Top section ---- */}
-            <div className="flex items-center justify-between gap-4 border-b border-border/60 px-5 py-4 sm:px-8">
+            <div className="flex shrink-0 items-center justify-between gap-4 border-b border-border/60 px-5 py-4 sm:px-8">
               {/* Left: large timer */}
               <div className="flex flex-col items-center gap-1">
                 <span
@@ -152,162 +183,328 @@ export function QuestionModal({
             </div>
 
             {/* ---- Center: question content ---- */}
-            <div className="flex flex-1 flex-col items-center justify-center gap-6 px-5 py-8 text-center sm:px-10">
-              {category && (
-                <div className="flex items-center gap-2 rounded-full border border-border/60 bg-background/40 px-4 py-1.5">
-                  <span className="text-xl">{category.glyph}</span>
-                  <span className="text-sm font-bold text-foreground">
-                    {category.name}
-                  </span>
-                  <span
-                    className="rounded-full px-2.5 py-0.5 text-xs font-black text-white"
-                    style={{ backgroundColor: `hsl(${currentColor.hsl})` }}
-                  >
-                    {question?.question.points}
-                  </span>
-                </div>
-              )}
+            {isMC ? (
+              <>
+                {/* MC: scrollable center with clickable options */}
+                <div className="flex flex-1 flex-col items-center gap-4 overflow-y-auto px-5 py-6 text-center sm:px-10">
+                  {category && (
+                    <div className="flex shrink-0 items-center gap-2 rounded-full border border-border/60 bg-background/40 px-4 py-1.5">
+                      <span className="text-xl">{category.glyph}</span>
+                      <span className="text-sm font-bold text-foreground">
+                        {category.name}
+                      </span>
+                      <span
+                        className="rounded-full px-2.5 py-0.5 text-xs font-black text-white"
+                        style={{ backgroundColor: `hsl(${currentColor.hsl})` }}
+                      >
+                        {question?.question.points}
+                      </span>
+                    </div>
+                  )}
 
-              {/* Question text */}
-              <div className="max-w-3xl">
-                <p className="text-2xl font-bold leading-snug text-foreground sm:text-3xl md:text-4xl">
-                  {question?.question.question}
-                </p>
-              </div>
+                  {/* Question text */}
+                  <div className="max-w-3xl">
+                    <p className="text-2xl font-bold leading-snug text-foreground sm:text-3xl md:text-4xl">
+                      {question?.question.question}
+                    </p>
+                  </div>
 
-              {/* Multiple Choice Options — render when questionType is set
-                  OR when option fields are present (handles data imported
-                  before questionType was added, or snake_case keys). */}
-              {(() => {
-                const q = question?.question;
-                if (!q) return null;
-                const isMC =
-                  q.questionType === 'multiple_choice' ||
-                  !!(q.optionA || q.optionB || q.optionC || q.optionD);
-                if (!isMC) return null;
-                const opts: [string, string | undefined][] = [
-                  ['A', q.optionA],
-                  ['B', q.optionB],
-                  ['C', q.optionC],
-                  ['D', q.optionD],
-                ];
-                const hasAny = opts.some(([, v]) => v);
-                if (!hasAny) return null;
-                return (
-                  <div className="grid w-full max-w-2xl grid-cols-1 gap-3 sm:grid-cols-2">
-                    {opts.map(([letter, text]) =>
-                      text ? (
-                        <div
-                          key={letter}
-                          className="flex items-center gap-3 rounded-2xl border-2 border-border/60 bg-card/60 px-4 py-3 text-left"
-                        >
-                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-gradient text-sm font-black text-white">
-                            {letter}
-                          </span>
-                          <span className="text-base font-bold text-foreground sm:text-lg">
-                            {text}
-                          </span>
-                        </div>
-                      ) : null
+                  {/* MC Options — clickable buttons that reveal the answer */}
+                  {mcData && (
+                    <div className="grid w-full max-w-2xl grid-cols-1 gap-3 sm:grid-cols-2">
+                      {mcData.opts.map(([letter, text]) =>
+                        text ? (
+                          <button
+                            key={letter}
+                            type="button"
+                            disabled={revealed}
+                            onClick={() => handleOptionClick(letter)}
+                            className={cn(
+                              'flex items-center gap-3 rounded-2xl border-2 px-4 py-3 text-left transition-all duration-300',
+                              !revealed &&
+                                'border-border/60 bg-card/60 hover:border-primary/50 hover:bg-primary/5 active:scale-[0.98] cursor-pointer',
+                              revealed &&
+                                selectedOption === letter &&
+                                letter === mcData.correctLetter &&
+                                'border-success bg-success/15',
+                              revealed &&
+                                selectedOption === letter &&
+                                letter !== mcData.correctLetter &&
+                                'border-destructive bg-destructive/15',
+                              revealed &&
+                                letter === mcData.correctLetter &&
+                                selectedOption !== letter &&
+                                'border-success bg-success/10',
+                              revealed &&
+                                letter !== mcData.correctLetter &&
+                                letter !== selectedOption &&
+                                'border-border/40 bg-card/30 opacity-50'
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm font-black text-white transition-colors duration-300',
+                                !revealed && 'bg-brand-gradient',
+                                revealed &&
+                                  letter === mcData.correctLetter &&
+                                  'bg-success',
+                                revealed &&
+                                  letter === selectedOption &&
+                                  letter !== mcData.correctLetter &&
+                                  'bg-destructive',
+                                revealed &&
+                                  letter !== mcData.correctLetter &&
+                                  letter !== selectedOption &&
+                                  'bg-muted-foreground/40'
+                              )}
+                            >
+                              {letter}
+                            </span>
+                            <span className="text-base font-bold text-foreground sm:text-lg">
+                              {text}
+                            </span>
+                            {revealed && letter === mcData.correctLetter && (
+                              <Check className="ml-auto h-5 w-5 shrink-0 text-success animate-fade-in" />
+                            )}
+                            {revealed &&
+                              letter === selectedOption &&
+                              letter !== mcData.correctLetter && (
+                                <X className="ml-auto h-5 w-5 shrink-0 text-destructive animate-fade-in" />
+                              )}
+                          </button>
+                        ) : null
+                      )}
+                    </div>
+                  )}
+
+                  {/* Compact one-line notification — reserved height prevents jumping */}
+                  <div className="flex h-8 shrink-0 items-center justify-center">
+                    {revealed && (
+                      <div className="flex items-center gap-2 text-sm font-bold animate-fade-in">
+                        <Check className="h-4 w-4 text-success" />
+                        <span className="text-success">الإجابة الصحيحة:</span>
+                        <span className="text-foreground">
+                          {question?.question.answer}
+                        </span>
+                      </div>
                     )}
                   </div>
-                );
-              })()}
 
-              {/* Media: image / audio / video */}
-              {question?.question.image && (
-                <div className="w-full max-w-2xl">
-                  <MediaImage
-                    src={questionImageUrl(question.question.image)}
-                    alt="صورة السؤال"
-                    className="aspect-video w-full rounded-2xl border-2 border-border/60 bg-card/60"
-                  />
+                  {/* Media: image / audio / video */}
+                  {question?.question.image && (
+                    <div className="w-full max-w-2xl shrink-0">
+                      <MediaImage
+                        src={questionImageUrl(question.question.image)}
+                        alt="صورة السؤال"
+                        className="aspect-video w-full rounded-2xl border-2 border-border/60 bg-card/60"
+                      />
+                    </div>
+                  )}
+
+                  {question?.question.audio && (
+                    <div className="w-full max-w-2xl shrink-0">
+                      <AudioPlayer
+                        src={questionAudioUrl(question.question.audio)}
+                        label="صوت السؤال"
+                      />
+                    </div>
+                  )}
+
+                  {question?.question.video && (
+                    <div className="w-full max-w-2xl shrink-0">
+                      <VideoPlayer
+                        src={questionVideoUrl(question.question.video)}
+                      />
+                    </div>
+                  )}
                 </div>
-              )}
 
-              {question?.question.audio && (
-                <div className="w-full max-w-2xl">
-                  <AudioPlayer
-                    src={questionAudioUrl(question.question.audio)}
-                    label="صوت السؤال"
-                  />
-                </div>
-              )}
-
-              {question?.question.video && (
-                <div className="w-full max-w-2xl">
-                  <VideoPlayer
-                    src={questionVideoUrl(question.question.video)}
-                  />
-                </div>
-              )}
-
-              {/* Reveal answer */}
-              {!revealed ? (
-                <GameButton
-                  variant="outline"
-                  size="lg"
-                  onClick={() => setRevealed(true)}
-                >
-                  <Eye className="h-5 w-5" />
-                  إظهار الإجابة
-                </GameButton>
-              ) : (
-                <div className="flex w-full max-w-3xl flex-col items-center gap-6 animate-scale-in">
-                  <div className="w-full rounded-2xl border-2 border-success/40 bg-success/10 px-6 py-5 text-center">
-                    <p className="text-xs font-bold uppercase tracking-wider text-success">
-                      الإجابة
-                    </p>
-                    <p className="mt-1 text-xl font-bold text-foreground sm:text-2xl">
-                      {question?.question.answer}
-                    </p>
-                    {(() => {
-                      const q = question?.question;
-                      if (!q) return null;
-                      const opts: [string, string | undefined][] = [
-                        ['A', q.optionA],
-                        ['B', q.optionB],
-                        ['C', q.optionC],
-                        ['D', q.optionD],
-                      ];
-                      const match = opts.find(
-                        ([, v]) =>
-                          v && v.trim().toLowerCase() === q.answer.trim().toLowerCase()
-                      );
-                      return match ? (
-                        <p className="mt-2 text-sm font-bold text-success/80">
-                          الخيار {match[0]}
-                        </p>
-                      ) : null;
-                    })()}
-                  </div>
-
-                  <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3">
+                {/* MC: pinned scoring panel — always visible, never pushed off-screen */}
+                <div className="shrink-0 border-t border-border/60 bg-card/80 px-5 py-4 sm:px-8">
+                  <div className="mx-auto grid w-full max-w-2xl grid-cols-3 gap-3">
                     <ResultButton
                       onClick={() => handleResult('current')}
-                      icon={<Check className="h-6 w-6" />}
-                      label="الفريق الحالي جاوب صح"
+                      icon={<Check className="h-5 w-5" />}
+                      label="الفريق الحالي"
                       tone="success"
+                      disabled={!revealed}
                     />
                     <ResultButton
                       onClick={() => handleResult('opponent')}
-                      icon={<X className="h-6 w-6" />}
-                      label="الفريق الآخر جاوب صح"
+                      icon={<X className="h-5 w-5" />}
+                      label="الفريق الآخر"
                       tone="secondary"
+                      disabled={!revealed}
                     />
                     <ResultButton
                       onClick={() => handleResult('none')}
-                      icon={<Minus className="h-6 w-6" />}
+                      icon={<Minus className="h-5 w-5" />}
                       label="محد جاوب"
                       tone="muted"
+                      disabled={!revealed}
                     />
                   </div>
                 </div>
-              )}
-            </div>
+              </>
+            ) : (
+              /* ---- Text questions: original layout completely unchanged ---- */
+              <div className="flex flex-1 flex-col items-center justify-center gap-6 px-5 py-8 text-center sm:px-10">
+                {category && (
+                  <div className="flex items-center gap-2 rounded-full border border-border/60 bg-background/40 px-4 py-1.5">
+                    <span className="text-xl">{category.glyph}</span>
+                    <span className="text-sm font-bold text-foreground">
+                      {category.name}
+                    </span>
+                    <span
+                      className="rounded-full px-2.5 py-0.5 text-xs font-black text-white"
+                      style={{ backgroundColor: `hsl(${currentColor.hsl})` }}
+                    >
+                      {question?.question.points}
+                    </span>
+                  </div>
+                )}
+
+                {/* Question text */}
+                <div className="max-w-3xl">
+                  <p className="text-2xl font-bold leading-snug text-foreground sm:text-3xl md:text-4xl">
+                    {question?.question.question}
+                  </p>
+                </div>
+
+                {/* Multiple Choice Options — render when questionType is set
+                    OR when option fields are present (handles data imported
+                    before questionType was added, or snake_case keys). */}
+                {(() => {
+                  const q = question?.question;
+                  if (!q) return null;
+                  const mc =
+                    q.questionType === 'multiple_choice' ||
+                    !!(q.optionA || q.optionB || q.optionC || q.optionD);
+                  if (!mc) return null;
+                  const opts: [string, string | undefined][] = [
+                    ['A', q.optionA],
+                    ['B', q.optionB],
+                    ['C', q.optionC],
+                    ['D', q.optionD],
+                  ];
+                  const hasAny = opts.some(([, v]) => v);
+                  if (!hasAny) return null;
+                  return (
+                    <div className="grid w-full max-w-2xl grid-cols-1 gap-3 sm:grid-cols-2">
+                      {opts.map(([letter, text]) =>
+                        text ? (
+                          <div
+                            key={letter}
+                            className="flex items-center gap-3 rounded-2xl border-2 border-border/60 bg-card/60 px-4 py-3 text-left"
+                          >
+                            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-gradient text-sm font-black text-white">
+                              {letter}
+                            </span>
+                            <span className="text-base font-bold text-foreground sm:text-lg">
+                              {text}
+                            </span>
+                          </div>
+                        ) : null
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Media: image / audio / video */}
+                {question?.question.image && (
+                  <div className="w-full max-w-2xl">
+                    <MediaImage
+                      src={questionImageUrl(question.question.image)}
+                      alt="صورة السؤال"
+                      className="aspect-video w-full rounded-2xl border-2 border-border/60 bg-card/60"
+                    />
+                  </div>
+                )}
+
+                {question?.question.audio && (
+                  <div className="w-full max-w-2xl">
+                    <AudioPlayer
+                      src={questionAudioUrl(question.question.audio)}
+                      label="صوت السؤال"
+                    />
+                  </div>
+                )}
+
+                {question?.question.video && (
+                  <div className="w-full max-w-2xl">
+                    <VideoPlayer
+                      src={questionVideoUrl(question.question.video)}
+                    />
+                  </div>
+                )}
+
+                {/* Reveal answer */}
+                {!revealed ? (
+                  <GameButton
+                    variant="outline"
+                    size="lg"
+                    onClick={() => setRevealed(true)}
+                  >
+                    <Eye className="h-5 w-5" />
+                    إظهار الإجابة
+                  </GameButton>
+                ) : (
+                  <div className="flex w-full max-w-3xl flex-col items-center gap-6 animate-scale-in">
+                    <div className="w-full rounded-2xl border-2 border-success/40 bg-success/10 px-6 py-5 text-center">
+                      <p className="text-xs font-bold uppercase tracking-wider text-success">
+                        الإجابة
+                      </p>
+                      <p className="mt-1 text-xl font-bold text-foreground sm:text-2xl">
+                        {question?.question.answer}
+                      </p>
+                      {(() => {
+                        const q = question?.question;
+                        if (!q) return null;
+                        const opts: [string, string | undefined][] = [
+                          ['A', q.optionA],
+                          ['B', q.optionB],
+                          ['C', q.optionC],
+                          ['D', q.optionD],
+                        ];
+                        const match = opts.find(
+                          ([, v]) =>
+                            v && v.trim().toLowerCase() === q.answer.trim().toLowerCase()
+                        );
+                        return match ? (
+                          <p className="mt-2 text-sm font-bold text-success/80">
+                            الخيار {match[0]}
+                          </p>
+                        ) : null;
+                      })()}
+                    </div>
+
+                    <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3">
+                      <ResultButton
+                        onClick={() => handleResult('current')}
+                        icon={<Check className="h-6 w-6" />}
+                        label="الفريق الحالي جاوب صح"
+                        tone="success"
+                      />
+                      <ResultButton
+                        onClick={() => handleResult('opponent')}
+                        icon={<X className="h-6 w-6" />}
+                        label="الفريق الآخر جاوب صح"
+                        tone="secondary"
+                      />
+                      <ResultButton
+                        onClick={() => handleResult('none')}
+                        icon={<Minus className="h-6 w-6" />}
+                        label="محد جاوب"
+                        tone="muted"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Footer hint */}
-            <div className="border-t border-border/60 px-5 py-3 text-center sm:px-8">
+            <div className="shrink-0 border-t border-border/60 px-5 py-3 text-center sm:px-8">
               <p className="text-xs text-muted-foreground">
                 إغلاق النافذة لا يُعيد المؤقت — استخدموا زر الإعادة
               </p>
@@ -351,11 +548,13 @@ function ResultButton({
   icon,
   label,
   tone,
+  disabled,
 }: {
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
   tone: 'success' | 'secondary' | 'muted';
+  disabled?: boolean;
 }) {
   const tones: Record<string, string> = {
     success: 'border-success/50 bg-success/10 text-success hover:bg-success/20',
@@ -366,9 +565,11 @@ function ResultButton({
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       className={cn(
         'flex flex-col items-center gap-2 rounded-2xl border-2 px-4 py-5 text-center transition-all hover:-translate-y-0.5 active:scale-95',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'disabled:opacity-40 disabled:pointer-events-none disabled:hover:translate-y-0 disabled:hover:scale-100',
         tones[tone]
       )}
     >
